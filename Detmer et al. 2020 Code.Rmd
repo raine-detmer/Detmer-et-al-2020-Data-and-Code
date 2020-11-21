@@ -1,0 +1,2291 @@
+---
+title: "Detmer et al. 2020 Code"
+author: "Raine Detmer"
+date: "11/20/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+#Model parameters 
+```{r}
+L_surface<-1000 #surface irradiance (mol/m^2/s)
+K_A<-1 #giant kelp frond density carrying capacity (prop. max. fronds/m^2)
+k_l<- -log(0.1)/K_A #giant kelp frond extinction coeff. (m^2/fronds)
+sigma_ext<-0.0001#supply rate of giant kelp gametophytes (via dispersal of spores) from external populations (ind./m^2/d)
+sigma_A<-0.01#rate of gametophyte production (via spore production) by local giant kelp sporophytes (ind./fronds/d)
+sigma_M<-0.001#rate of increase in fractional cover of understory macroalgae from external populations (1/d)
+sigma_I<-0.0005#rate of increase in fractional cover of sessile inverts from external populations (1/d)
+r_G<-0.00000001#recruitment rate of giant kelp gametophytes to juvenile sporophytes (m^2*s/d/mol)
+r_J<-0.00001#maturation rate of juvenile sporophytes to adult sporophyte fronds (m^2*s/mol/d); note it is assumed that an individual juvenile sporophyte has 1 frond
+g_A<-0.00009#growth rate of adult fronds (m^4*s/mol/d/fronds)
+g_M<-0.00006#growth rate of understory macroalgae (m^2*s/mol/d)
+g_I<-0.008#growth rate of sessile invertebrates (1/d)
+m_G<-1#mortality rate of giant kelp gametophytes (m^2/ind./d)
+m_J<-1#mortality rate of juvenile giant kelp sporophytes (m^2/ind./d)
+s_M<-0.009#senescence rate of understory macroalgae (1/d)
+s_I<-0.002#senescence rate of sessile invertebrates (1/d)
+S_T<-1#total substrate space available for understory macroalgal and invertebrate growth
+alpha<-0.8#competition coefficient of sessile inverts on understory macroalgae
+beta<-1.25#competition coefficient of understory macroalgae on sessile inverts
+
+# frond senescence
+a <- 0.05 # amplitude of synchronized giant kelp frond senescence (1/d)
+b <- 0.0125 # baseline rate of giant kelp frond senescence (1/d)
+c <- 0.015#decay rate of synchrony in giant kelp frond senescence
+d_syn <- -70 # displacement of the peak in synchrony is 70 days
+period <- 110 # 110 day period between peaks in senescence
+delay <- 150 # time to delay initiation of senescence is 150 days
+#note: if changing the delay, need to change the displacement by the same number of days (and vice versa), ex. if delay is decreased by 20 (from 150 to 130), need to increase d_syn by 20 (from -70 to -50); if delay is increased by 20 (from 150 to 170), need to decrease d_syn by 20 (from -70 to -90) in order to keep the shape of the senescence function the same
+
+#initial conditions: end values of a simulation of the model over length tset<-seq(from = 0, to = 5475, length.out = 82125) with no storms (see next code chunk for details on model simulations)
+G0<-0.08#initial density of giant kelp gametophytes (ind./m^2)
+J0<-0.00007#initial density of juvenile giant kelp sporophytes (ind./m^2)
+A0<-0.7#initial density of adult fronds (fronds/m^2)
+M0<-0.20#initial fractional cover of understory macroalgae
+I0<-0.60#initial fractional cover of sessile invertebrates
+
+
+```
+
+
+
+#Details on how to run simulations of the model
+```{r}
+psi.A.mild<-.95#proportion of adult giant kelp fronds remaining after a mild storm
+psi.A.sev<-0#proportion of adult giant kelp fronds remaining after a severe storm (change this value to change intensity of severe storms)
+psi.b<-0.1#proportion of J, M, and I remaining after a severe storm (changes depending on the value of psi.A.sev and the scouring scenario)
+
+tset.1.0 <- seq(from = 0, to = 5475, length.out = 82125)#creating vector of time steps from 0 to 5475 (around 15 years) with 82125 intervals to iterate over
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1154,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)#time points at which mild storms occur (in this case, every day between Dec. 1 and Mar. 1 of each year)
+t_severe_storm_set<-c(1155,2980,4805)#time points at which severe storms occur (in this case, on Mar. 1 of years 3, 8, and 13)
+tset.1.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.1.0)))#new vector of time steps after any dates with storms that weren't already in tset.1.0 have been incorporated
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))#all time points at which a storm occurs
+
+#creating holding vectors for the outputs of the for loop; setting the first element in each holding vector
+a_t <- NaN*tset.1.1;a_t[1]<-0#senescence rate of synchronized fronds
+t_sen_set<-NaN*tset.1.1;t_sen_set[1]<-0#t_sen is a separate time vector; a_t is a function of t_sen
+sA_set.1 <- NaN*tset.1.1; sA_set.1[1]<- 0#overall rate of frond senescence
+f_syn <- NaN*tset.1.1 #proportion of the fronds that are synchronized 
+G.simu.1 <- NaN*tset.1.1; G.simu.1[1]<-G0 #giant kelp gametophytes
+J.simu.1 <- NaN*tset.1.1; J.simu.1[1]<-J0 #juvenile giant kelp sporophytes
+A.simu.1 <- NaN*tset.1.1; A.simu.1[1]<-A0 #adult giant kelp fronds
+M.simu.1 <- NaN*tset.1.1; M.simu.1[1]<-M0 #understory macroalgae
+I.simu.1 <- NaN*tset.1.1; I.simu.1[1] <- I0 #sessile invertebrates
+psi.simu.1<-NaN*tset.1.1; psi.simu.1[1:2]<-0 #psi_A (proportion of giant kelp fronds remaining after a storm)
+
+
+#simulate the model using a for loop
+for(i in 2:length(tset.1.1)){
+  dt <- tset.1.1[i]-tset.1.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.1[i-1]
+	J <- J.simu.1[i-1]
+	A <- A.simu.1[i-1]
+	M <- M.simu.1[i-1] 
+	I <- I.simu.1[i-1]
+	
+if(tset.1.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}#any time a storm occurs, t_sen gets set to 0 (re-starting the synchronized senescence function a_t)
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0#the rate of synchronized senescence is 0 for the first 150 days after the most recent storm (delay=150)
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)#after delay days since the most recent storm, synchronized senescence is initiated
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu.1[i-1]#during the delay period following a storm, the proportion of synchronized fronds is equal to the prop. that got removed (1-psi_A) and are growing back
+  } else{
+    f_syn[i] <- (1-psi.simu.1[i-1])*exp(-c*(t_sen_set[i]-delay))#after the delay period, the proportion of synchronized fronds decays exponentially
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) #overall senescence rate is a composite of the senescence of synchronous fronds (f_syn) and asynchronous fronds (1-f_syn) 
+		
+  if(tset.1.1[i] %in% t_mild_storm_set){ #when a weak storm occurs
+    psi.simu.1[i]<-psi.A.mild #psi_A=psi.A.mild 
+    A.simu.1[i]<-psi.A.mild*A #A=psi.A.mild*A
+    J.simu.1[i]<-1*J#J, M, and I are not affected by mild storms
+    M.simu.1[i]<-1*M
+    I.simu.1[i]<-1*I
+    
+  } else if (tset.1.1[i] %in% t_severe_storm_set){ #when a severe storm occurs
+    psi.simu.1[i]<-psi.A.sev #psi_A=psi.A.sev
+    A.simu.1[i]<-psi.A.sev*A #A=psi.A.sev*A
+    J.simu.1[i]<-psi.b*J#the proportion of benthic organisms (J, M, and I) remaining after a storm is determined by psi.b
+    M.simu.1[i]<-psi.b*M
+    I.simu.1[i]<-psi.b*I
+    
+  } else {
+    psi.simu.1[i]<-psi.simu.1[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt #equation for change in juvenile giant kelp sporophyte population
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt#equation for change in adult giant kelp frond density
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt#equation for change in understory macroalgae cover
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt#equation for change in sessile invert cover
+  J.simu.1[i] <- J + dJ
+  A.simu.1[i] <- A + dA
+  M.simu.1[i] <- M + dM
+	I.simu.1[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt#equation for change in giant kelp gametophyte population
+	G.simu.1[i] <- G + dG
+  sA_set.1[i] <- sA 
+}
+
+
+```
+
+
+
+#Plotting frond senescence (Appendix S1: Figure S1)
+```{r, fig.height=4.5, fig.width=6}
+#plot of adult giant kelp frond density overlayed with rate of senescence (from the above simulation)
+
+#tiff(filename="FigS1.tif", height=4.5, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mar=c(4,4,4,4),mfrow=c(1,1))
+plot(x = tset.1.1, y = A.simu.1, type = 'l', col='palegreen3',las = 1, lwd=2, xlab = 'Time (years)',ylab='Frond density   A',xlim=c(1095,2120), ylim = c(0,1.1), xaxt="n", yaxt="n")#just plotting four years of the above simulation
+abline(h=0)
+lines(x = tset.1.1, y = sA_set.1*10, col = 'orange', lwd = 1, lty=3, type='l')#multiply senescence by 10 to plot it on the same scale as frond density
+legend(x = 1095, y = 1.05, legend = c('A',expression('s'[A])),lwd=2,col=c('palegreen3','orange'), lty=c(1,3),ncol=2, cex=.85)
+axis(side=2, at=c(0,.5,1),labels=NULL,col='palegreen3', las=1)
+axis(side=4, at=c(0,.5,1),labels=c(0,.05,.1),col='orange', las=1)
+axis(side=1, at=c(1095,1460,1825,2190), labels=c(1,2,3,4),las=1)
+mtext(expression("Senescence rate   s"[A]), side=4, line=3, las=0)
+#dev.off() #for making a tif file of the plot
+
+
+
+```
+
+
+
+#Visualizing the different scouring scenarios used throughout the study (Appendix S1: Figure S2)
+
+```{r, fig.height=5, fig.width=6}
+#the different levels of disturbance intensity (psi_A and psi_B)
+psi.A1<-c(0.7,0.8,0.9,0.99,1)#1-psi_A (proportion of giant kelp fronds removed by a storm)
+psi.b_scour1<-c(0,0,0.1,0.5,0.9)#1-psi_B (proportion of juvenile giant kelp, understory macroalgae, and sessile inverts removed by a storm), intermediate scouring scenario
+psi.b_scour2<-c(0.7,0.8,0.9,0.99,1)#1-psi_B, proportional scouring scenario
+psi.b_scour3<-c(0,0,0,0,0)#1-psi_B, no scouring scenario
+
+#plotting the different relationships between psi_A and psi_B (Appendix S1: Figure S2)
+#tiff(filename="FigS2.tif", height=5, width=6,units="in",res=800,compression="lzw")#for making tif file
+plot(x =psi.A1, y = psi.b_scour1, type = 'b',pch=18,lty=1, col='black',las = 1, lwd=2,xlab = expression('Fraction of kelp removed (1-psi'['A']*')'), ylab = expression("Fraction of benthic organisms removed (1-psi"['b']*")"), ylim = c(0,1))
+lines(x = psi.A1, y = psi.b_scour2,type='b',lty=3,pch=18 ,col = 'black', lwd = 2)
+lines(x = psi.A1, y = psi.b_scour3,type='b',lty=4,pch=18 ,col = 'black', lwd = 2)
+legend(x = 0.70, y = 0.5, legend = c('Intermediate scouring', 'Proportional scouring', 'No scouring'),lwd=2,col=c('black', 'black','black'), lty=c(1,3,4), cex=1,ncol=1)
+#dev.off()#for making tif file
+
+
+
+```
+
+
+
+
+
+#Simulating frond density in mild and severe years (right column of Figure 2)
+
+```{r}
+#ensemble run for severe storm years (Figure 2b)
+psi.A.mild<-.95
+psi.A.sev<-0
+psi.b<-0.1#keep psi_B equal to 0.1 for the ensemble run (intermediate scouring scenario)
+
+tset.2.0 <- seq(from = 0, to = 5475, length.out = 5476)#for ensemble run, the number of time intervals (length.out) was changed from 82125 to 5476 to keep all time steps whole numbers so the lengths didn't change with the different numbers of stormy days in each run
+
+#For the ensemble run, all simulations were run for 15 years with severe storms occurring at a frequency of approximately one every five years. The timing of the first severe storm in this time span was varied from Dec. 5 (tset=1070) to Mar. 1 (tset=1155) by 5 day intervals. In each year, mild storms started on Dec. 1 and ended on the day before the severe storm (in years without severe storms, mild storms occurred every day between Dec. 1 and Mar. 1, except for in the winter of years 3-4 when they did not start until Jan. 1 of year 4 to avoid interference with the end of the ensemble run in year 3) 
+
+#outer for loop: need vector of mild storm and severe storm values
+t_strong_storm_date<-c(1070, 1075, 1080, 1085, 1090, 1095, 1100, 1105, 1110, 1115, 1120, 1125, 1130, 1135, 1140, 1145, 1150, 1155)#for each run, the value of the first element was changed. The values used were 1070, 1075, 1080, 1085... ...1155
+t_mild_storm_end<-c(1069,1074,1079,1184,1089,1094,1099,1104,1109,1114,1119, 1124,1129,1134,1139,1144,1149,1154)#for each run, the fourth element of t_mild_storm_set was changed to ensure that mild storms stopped a day before the severe storm in year 3 occurred. The values used were 1065:1069, 1065:1074, 1065:1079... ...1065:1154
+
+A.simu.ensemble<-data.frame(matrix(ncol=18, nrow=5476))#store the simulations of frond density in a data frame: the columns are the frond densities from the different simulations (corresponding to the different timing of storms), the rows are the time points from each simulation 
+colnames(A.simu.ensemble)<-c("A.dec.5","A.dec.10","A.dec.15","A.dec.20","A.dec.25","A.dec.30","A.jan.5","A.jan.10","A.jan.15","A.jan.20","A.jan.25","A.jan.30","A.feb.4", "A.feb.9","A.feb.14","A.feb.19","A.feb.24","A.mar.1")#name the columns with the date of the severe storm in each simulation
+
+
+for(j in 1:length(t_strong_storm_date)){
+
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:t_mild_storm_end[j], 1460:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(t_strong_storm_date[j],2980,4805)
+tset.2.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.2.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+t_sen_set<-NaN*tset.2.1;t_sen_set[1]<-0
+a_t <- NaN*tset.2.1;a_t[1]<-0
+sA_set <- NaN*tset.2.1; sA_set[1]<- 0
+f_syn <- NaN*tset.2.1
+G.simu.2 <- NaN*tset.2.1; G.simu.2[1]<-G0
+J.simu.2 <- NaN*tset.2.1; J.simu.2[1]<-J0
+A.simu.2 <- NaN*tset.2.1; A.simu.2[1]<-A0
+M.simu.2 <- NaN*tset.2.1; M.simu.2[1]<-M0
+I.simu.2 <- NaN*tset.2.1; I.simu.2[1] <- I0
+psi.simu<-NaN*tset.2.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.2.1)){
+  dt <- tset.2.1[i]-tset.2.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.2[i-1]
+	J <- J.simu.2[i-1]
+	A <- A.simu.2[i-1]
+	M <- M.simu.2[i-1] 
+	I <- I.simu.2[i-1]
+	
+	if(tset.2.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.2.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    A.simu.2[i]<-psi.A.mild*A
+    J.simu.2[i]<-1*J 
+    M.simu.2[i]<-1*M
+    I.simu.2[i]<-1*I
+    
+  } else if (tset.2.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev
+    A.simu.2[i]<-psi.A.sev*A
+    J.simu.2[i]<-psi.b*J
+    M.simu.2[i]<-psi.b*M
+    I.simu.2[i]<-psi.b*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.2[i] <- J + dJ
+  A.simu.2[i] <- A + dA
+  M.simu.2[i] <- M + dM
+	I.simu.2[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.2[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+A.simu.ensemble[ ,j]<-A.simu.2
+}
+
+```
+
+
+
+```{r}
+#analyzing the results of the ensemble run
+
+#taking the average of each row (the average frond density at each date) and making it a column
+A.simu.ensemble$mean<-rowMeans(A.simu.ensemble[ ,c(1:18)])
+
+#calculating the standard deviation of each row and making it a column
+A.simu.ensemble$sd<-apply(A.simu.ensemble[ ,c(1:18)],1, sd)
+
+#calculating the 95% confidence intervals for each row: CI=mean +/- 1.96*sd/sqrt(number of observations)
+A.simu.ensemble$minus_CI<-A.simu.ensemble$mean-1.96*A.simu.ensemble$sd/sqrt(18)
+
+A.simu.ensemble$plus_CI<-A.simu.ensemble$mean+1.96*A.simu.ensemble$sd/sqrt(18)
+
+```
+
+
+
+```{r}
+#simulating frond density in individual mild and severe years (plots on the right side of Figure 2a and 2c)
+
+#this simulation is the same as that for the ensemble run except the severe storm (in year 3) occurs on Mar. 1 (and the number of time intervals is greater)
+#for the mild year (Figure 2a), looked at year 6 (days 2190 to 2525)
+#for the severe year (Figure 2c), looked at year 3 (days 1095 to 1430)
+
+psi.A.mild<-.95
+psi.A.sev<-0
+psi.b<-0.1
+
+tset.3.0 <- seq(from = 0, to = 5475, length.out = 82125)#change the number of time intervals back to 82125
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1154, 1460:1515,1795:1880,2160:2245,2555:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,2980,4805)
+tset.3.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.3.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+t_sen_set<-NaN*tset.3.1;t_sen_set[1]<-0
+a_t <- NaN*tset.3.1;a_t[1]<-0
+sA_set <- NaN*tset.3.1; sA_set[1]<- 0
+f_syn <- NaN*tset.3.1
+G.simu.3 <- NaN*tset.3.1; G.simu.3[1]<-G0
+J.simu.3 <- NaN*tset.3.1; J.simu.3[1]<-J0
+A.simu.3 <- NaN*tset.3.1; A.simu.3[1]<-A0
+M.simu.3 <- NaN*tset.3.1; M.simu.3[1]<-M0
+I.simu.3 <- NaN*tset.3.1; I.simu.3[1] <- I0
+psi.simu<-NaN*tset.3.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.3.1)){
+  dt <- tset.3.1[i]-tset.3.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.3[i-1]
+	J <- J.simu.3[i-1]
+	A <- A.simu.3[i-1]
+	M <- M.simu.3[i-1] 
+	I <- I.simu.3[i-1]
+	
+	if(tset.3.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.3.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.3[i]<-1*J 
+    A.simu.3[i]<-psi.A.mild*A
+    M.simu.3[i]<-1*M
+    I.simu.3[i]<-1*I
+    
+  } else if (tset.3.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev
+    J.simu.3[i]<-psi.b*J
+    A.simu.3[i]<-psi.A.sev*A
+    M.simu.3[i]<-psi.b*M
+    I.simu.3[i]<-psi.b*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.3[i] <- J + dJ
+  A.simu.3[i] <- A + dA
+  M.simu.3[i] <- M + dM
+	I.simu.3[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.3[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+```
+
+
+#Analyzing the CDIP swell data and the SBC LTER frond density data to look for mild and severe storm years (Appendix S1: Figures S3 and S4) 
+
+
+
+```{r}
+
+#CDIP swell data: import the data set "MHK_Hs.csv"
+library(readr)
+mohk_waves.0 <- read_csv("MHK_Hs.csv")
+
+#name the column with the data on max wave height max_wave
+max_wave<-mohk_waves.0$Max_Hs_m
+
+#add an index corresponding to the row numbers, reorder the columns so this index is the first column
+mohk_waves.0$index<-c(1:length(mohk_waves.0$Serial_Date))
+mohk_waves<-mohk_waves.0[, c(10, 1:9)]
+
+#for the years with severe storms (wave height over 2.5m), the following code was used to get the actual wave height and the date at which it occurred:
+severe_storm_col<-max_wave*NaN
+
+for(i in 1:length(max_wave)){
+ 
+  if(max_wave[i] > 2.5 ){
+   severe_storm_col[i] <- 'severe'
+  }
+}
+
+mohk_waves$severe_storm<-severe_storm_col
+mohk_severe_storms<-mohk_waves[mohk_waves$severe_storm=="severe", ]
+mohk_severe_storms#gives the dates of all severe storms, which are then plotted in Appendix S1: Figure S4 (see next code chunk)
+
+
+mohk_waves[mohk_waves$Year == 2002 & mohk_waves$Month==11 & mohk_waves$Day==1, ]#use this to find the rows (index #) in the mohk_waves data frame corresponding to the dates of interest in order to plot the wave heights in desired time intervals for Figure S4 (11/1/2002-4/30/2003 for year 1, 11/1/2003-4/30/2004 for year 2, etc)
+
+```
+
+#Plotting Appendix S1: Figure S4
+```{r, fig.height=6, fig.width=6}
+
+norm_winter<-c(1:181)#number of days between Nov. 1 and April 30 in normal years
+leap_winter<-c(1:182)#number of days between Nov. 1 and April 30 in leap years
+
+#Appendix S1: Figure S4: plotting  the maximum wave heights for each day in the winters (Nov 1-April 30) of each year for which there is data on kelp frond density 
+#tiff(filename="FigS4.tif", height=6, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mfrow=c(6,3), omi=c(0.25, 0.75, 0,0))
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[1035:1215], type="b", ylim=c(0,3.25), main='11/1/02 - 4/30/03', xaxt="n", yaxt="n")
+abline(h=2.5)#time interval is mohk_waves[mohk_waves$Year == 2002 & mohk_waves$Month==11 & mohk_waves$Day==1, ]:mohk_waves[mohk_waves$Year == 2003 & mohk_waves$Month==4 & mohk_waves$Day==30, ]
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+mtext("Max. wave height (m)", side=2,line=2, outer=TRUE)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(leap_winter,max_wave[1400:1581], type="b", ylim=c(0,3.25), main='11/1/03 - 4/30/04', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[1766:1946], type="b", ylim=c(0,3.25), main='11/1/04 - 4/30/05', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[2131:2311], type="b", ylim=c(0,3.25), main='11/1/05 - 4/30/06 (S)', xaxt="n", yaxt="n"); text(51, 2.568,'*', cex=3,col="red")#label severe storm (see above code chunks for how this date was determined)
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[2496:2676], type="b", ylim=c(0,3.25), main='11/1/06 - 4/30/07 (M)', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(leap_winter,max_wave[2861:3042], type="b", ylim=c(0,3.25), main='11/1/07 - 4/30/08 (S)', xaxt="n", yaxt="n"); text(35, 3.23,'*', cex=3,col="red")
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+text(117, 2.726,'*', cex=3,col="red")
+abline(h=2.5)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[3227:3407], type="b", ylim=c(0,3.25), main='11/1/08 - 4/30/09 (M)', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[3592:3772], type="b", ylim=c(0,3.25), main='11/1/09 - 4/30/10 (S)', xaxt="n", yaxt="n"); text(120, 2.519,'*', cex=3,col="red")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[3957:4137], type="b", ylim=c(0,3.25), main='11/1/10 - 4/30/11 (M)', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(leap_winter,max_wave[4322:4503], type="b", ylim=c(0,3.25), main='11/1/11 - 4/30/12', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[4688:4868], type="b", ylim=c(0,3.25), main='11/1/12 - 4/30/13', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[5053:5233], type="b", ylim=c(0,3.25), main='11/1/13 - 4/30/14 (S)', xaxt="n", yaxt="n"); text(121, 2.575,'*', cex=3,col="red")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[5418:5598], type="b", ylim=c(0,3.25), main='11/1/14 - 4/30/15 (M)', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=NA,las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(leap_winter,max_wave[5783:5964], type="b", ylim=c(0,3.25), main='11/1/15 - 4/30/16', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=c("N","D","J","F","M","A"),las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[6149:6329], type="b", ylim=c(0,3.25), main='11/1/16 - 4/30/17', xaxt="n", yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=c("N","D","J","F","M","A"),las=0)
+axis(side=2, at=c(0,1,2,3),labels=NA, las=1)
+par(mai=c(0.2,0.2,0.2,0.01))
+plot(norm_winter,max_wave[6514:6694], type="b", ylim=c(0,3.25), main='11/1/17 - 4/30/18', xaxt="n",xlab=NA, yaxt="n")
+abline(h=2.5)
+axis(side=1, at=c(0,31,62,90,121,151), labels=c("N","D","J","F","M","A"),las=0)
+axis(side=2, at=c(0,1,2,3), las=1)
+mtext("Month",side=1, outer=TRUE)
+#dev.off()#for getting plot output as tif file
+```
+
+
+#Plotting Appendix S1: Figure S3
+```{r, fig.width=6, fig.height=4}
+#frond density: importing LTER data set "Macrocystis_pyrifera_standing_crop_plant_density_and_loss_rates_with_SE_20180522.csv" 
+
+library(readr)
+kelp_standing_crop_data <- read_csv("Macrocystis_pyrifera_standing_crop_plant_density_and_loss_rates_with_SE_20191204.csv")
+
+
+#subsetting out the data from Mohawk reef
+mohk_kelp<-subset(kelp_standing_crop_data, kelp_standing_crop_data$Site=="MOHK", na.rm=TRUE)
+
+
+mohk_kelp$index<-c(1:207)
+mohk_kelp<-mohk_kelp[c(1,38,2:37)]#remove unused columns
+
+#naming the data on frond density
+frond_dens<-mohk_kelp$Frond_density
+
+#manually found the index corresponding to the first and last sample date for each year in the mohk_kelp data frame by looking through the data:
+#2003=10:20, 2004=21:31, 2005=32:41, 2006=42:53,2007=54:65, 2008=66:77, 2009=78:89, 2010=90:101, 2011=102:113, 2012=114:125,2013=126:137, 2014=138:149, 2015=150:161, 2016=162:173, 2017=174:185
+#then used the following code to compute the max.frond density in each year:
+#max(mohk_kelp$Frond_density[10:20])#max for 2003, for 2004 would use 21:31, 2005=32:41, 2006=42:53,2007=54:65, 2008=66:77, 2009=78:89, 2010=90:101, 2011=102:113, 2012=114:125,2013=126:137, 2014=138:149, 2015=150:161, 2016=162:173, 2017=174:185
+#mohk_kelp[mohk_kelp$Frond_density == 11.39, ]#enter the max frond density for each year (determined above) to find the month in which this density occurred
+
+#vector of the month of max frond density for the years 2003-2017 (see above comments for how these values were obtained)
+max_frond_month<-c(12,8,11,12,5,11,5,12,6,1,9,10,8,12,9)#note in 2015, the first max occurred in January, but we decided to use the post-winter max in August (which was almost the same value) because we felt it better reflected recovery time following removal by winter storms, which can occur through March
+
+#read through the data set to find the index corresponding to the frond density in March of each year, saved these March frond densities as mar_fronds
+mar_fronds<-c(frond_dens[12],frond_dens[22],frond_dens[33],frond_dens[44],frond_dens[56],frond_dens[68],frond_dens[80],frond_dens[92],frond_dens[104],frond_dens[116],frond_dens[128],frond_dens[140],frond_dens[152],frond_dens[164],frond_dens[176])
+
+
+mild_year_fronds<-c(frond_dens[56],frond_dens[80],frond_dens[104],frond_dens[152])#labeling mild years based on wave data and frond density patterns (determined after inspecting Appendix S1: Figures S3 below)
+severe_year_fronds<-c(frond_dens[44],frond_dens[68],frond_dens[92],frond_dens[140])#labeling severe years based on wave data and frond density patterns
+
+year_labels <- c('03','04','05','06','07','08','09','10','11','12','13','14','15','16','17')
+
+#Appendix S1: Figure S3: plot of frond density in March vs month of max frond density, with mild vs severe years colored
+#tiff(filename="FigS3.tif", height=4, width=6,units="in",res=800,compression="lzw")#for making tif file
+plot(mar_fronds,max_frond_month,type='n', xlab = expression("Frond density in March (fronds/m"^2*")"), ylab="Month of max. frond density", las=1); text(mar_fronds,max_frond_month,year_labels, cex=.8,col= ifelse(mar_fronds %in% mild_year_fronds, "blue", ifelse(mar_fronds %in% severe_year_fronds,"red", "black")))
+#dev.off()
+
+```
+
+
+
+#Analyzing frond density data in mild and severe years (left column of Figure 2)
+
+```{r}
+#getting the frond densities in each mild and severe storm year and normalizing them to the max density in that year
+#mild years: 2007, 2009, 2011, 2015
+#severe years: 2006, 2008, 2010, and 2014
+
+mohk_2006<-mohk_kelp$Frond_density[42:53]
+norm_mohk_2006<-mohk_2006/max(mohk_2006)
+
+mohk_2007<-mohk_kelp$Frond_density[54:65]
+norm_mohk_2007<-mohk_2007/max(mohk_2007)
+
+mohk_2008<-mohk_kelp$Frond_density[66:77]
+norm_mohk_2008<-mohk_2008/max(mohk_2008)
+
+mohk_2009<-mohk_kelp$Frond_density[78:89]
+norm_mohk_2009<-mohk_2009/max(mohk_2009)
+
+mohk_2010<-mohk_kelp$Frond_density[90:101]
+norm_mohk_2010<-mohk_2010/max(mohk_2010)
+
+mohk_2011<-mohk_kelp$Frond_density[102:113]
+norm_mohk_2011<-mohk_2011/max(mohk_2011)
+
+mohk_2014<-mohk_kelp$Frond_density[138:149]
+norm_mohk_2014<-mohk_2014/max(mohk_2014)
+
+mohk_2015<-mohk_kelp$Frond_density[150:161]
+norm_mohk_2015<-mohk_2015/max(mohk_2015)
+
+month.1<-c(1:12)
+
+#mild years
+mohk_mild<-cbind(month.1, norm_mohk_2007,norm_mohk_2009,norm_mohk_2011, norm_mohk_2015)
+#monthly mild year mean frond density
+mild_means<-apply(mohk_mild[ ,c(2:5)],1,mean, na.rm=TRUE)
+#monthly mild year standard error
+SE_mild.01<- sd(mohk_mild[1,c(2:5)])/sqrt(4)
+SE_mild.02<- sd(mohk_mild[2,c(2:5)])/sqrt(4)
+SE_mild.03<- sd(mohk_mild[3,c(2:5)])/sqrt(4)
+SE_mild.04<- sd(mohk_mild[4,c(2:5)])/sqrt(4)
+SE_mild.05<- sd(mohk_mild[5,c(2:5)])/sqrt(4)
+SE_mild.06<- sd(mohk_mild[6,c(2:5)])/sqrt(4)
+SE_mild.07<- sd(mohk_mild[7,c(2:5)])/sqrt(4)
+SE_mild.08<- sd(mohk_mild[8,c(2:5)])/sqrt(4)
+SE_mild.09<- sd(mohk_mild[9,c(2:5)])/sqrt(4)
+SE_mild.10<- sd(mohk_mild[10,c(2:5)])/sqrt(4)
+SE_mild.11<- sd(mohk_mild[11,c(2:5)])/sqrt(4)
+SE_mild.12<- sd(mohk_mild[12,c(2:5)])/sqrt(4)
+
+
+#repeat for severe years 
+mohk_severe<-cbind(month.1, norm_mohk_2006,norm_mohk_2008,norm_mohk_2010,norm_mohk_2014)
+severe_means<-apply(mohk_severe[ ,c(2:5)],1,mean, na.rm=TRUE)
+#getting standard errors
+SE_severe.01<- sd(mohk_severe[1,c(2:5)])/sqrt(4)
+SE_severe.02<- sd(mohk_severe[2,c(2:5)])/sqrt(4)
+SE_severe.03<- sd(mohk_severe[3,c(2:5)])/sqrt(4)
+SE_severe.04<- sd(mohk_severe[4,c(2:5)])/sqrt(4)
+SE_severe.05<- sd(mohk_severe[5,c(2:5)])/sqrt(4)
+SE_severe.06<- sd(mohk_severe[6,c(2:5)])/sqrt(4)
+SE_severe.07<- sd(mohk_severe[7,c(2:5)])/sqrt(4)
+SE_severe.08<- sd(mohk_severe[8,c(2:5)])/sqrt(4)
+SE_severe.09<- sd(mohk_severe[9,c(2:5)])/sqrt(4)
+SE_severe.10<- sd(mohk_severe[10,c(3:5)])/sqrt(4)
+SE_severe.11<- sd(mohk_severe[11,c(2:5)])/sqrt(4)
+SE_severe.12<- sd(mohk_severe[12,c(2:5)])/sqrt(4)
+
+```
+
+
+#Plotting Figure 2: comparison of model simulations and empirical data from mild and severe years 
+
+```{r, fig.height=6,fig.width=6}
+#plotting Figure 2
+#tiff(filename="Fig2.tif", height=6, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mfrow=c(3,2))
+#plotting average monthly frond densities (and standard deviation) of mild years
+par(mai=c(0.35,0.8,0.15,0.1))
+plot(month.1,mild_means,ylim=c(0,1),type='o',xlab = NA,ylab = 'Mean normalized frond density', xaxt="n", yaxt="n", cex.lab=1.1, pch=16)
+arrows(1, mild_means[1],1,mild_means[1]+SE_mild.01, angle=90, length=.05)
+arrows(1, mild_means[1],1,mild_means[1]-SE_mild.01, angle=90, length=.05)
+arrows(2, mild_means[2],2,mild_means[2]+SE_mild.02, angle=90, length=.05)
+arrows(2, mild_means[2],2,mild_means[2]-SE_mild.02, angle=90, length=.05)
+arrows(3, mild_means[3],3,mild_means[3]+SE_mild.03, angle=90, length=.05)
+arrows(3, mild_means[3],3,mild_means[3]-SE_mild.03, angle=90, length=.05)
+arrows(4, mild_means[4],4,mild_means[4]+SE_mild.04, angle=90, length=.05)
+arrows(4, mild_means[4],4,mild_means[4]-SE_mild.04, angle=90, length=.05)
+arrows(5, mild_means[5],5,mild_means[5]+SE_mild.05, angle=90, length=.05)
+arrows(5, mild_means[5],5,mild_means[5]-SE_mild.05, angle=90, length=.05)
+arrows(6, mild_means[6],6,mild_means[6]+SE_mild.06, angle=90, length=.05)
+arrows(6, mild_means[6],6,mild_means[6]-SE_mild.06, angle=90, length=.05)
+arrows(7, mild_means[7],7,mild_means[7]+SE_mild.07, angle=90, length=.05)
+arrows(7, mild_means[7],7,mild_means[7]-SE_mild.07, angle=90, length=.05)
+arrows(8, mild_means[8],8,mild_means[8]+SE_mild.08, angle=90, length=.05)
+arrows(8, mild_means[8],8,mild_means[8]-SE_mild.08, angle=90, length=.05)
+arrows(9, mild_means[9],9,mild_means[9]+SE_mild.09, angle=90, length=.05)
+arrows(9, mild_means[9],9,mild_means[9]-SE_mild.09, angle=90, length=.05)
+arrows(10, mild_means[10],10,mild_means[10]+SE_mild.10, angle=90, length=.05)
+arrows(10, mild_means[10],10,mild_means[10]-SE_mild.10, angle=90, length=.05)
+arrows(11, mild_means[11],11,mild_means[11]+SE_mild.11, angle=90, length=.05)
+arrows(11, mild_means[11],11,mild_means[11]-SE_mild.11, angle=90, length=.05)
+arrows(12, mild_means[12],12,mild_means[12]+SE_mild.12, angle=90, length=.05)
+arrows(12, mild_means[12],12,mild_means[12]-SE_mild.12, angle=90, length=.05)
+axis(side=1, at=c(1,2,3,4,5,6,7,8,9,10,11,12), labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), las=1)
+mtext("a) Average mild year: monthly means vs model", side=3, line=0, cex=.8, adj=0)
+#plotting a mild year of the model simulation
+par(mai=c(0.35,0.8,0.15,0.1))
+plot(x = tset.3.1, y = A.simu.3, type = 'l', col='palegreen3',las = 1, lwd=2, xlab = NA, ylab = 'Frond density', ylim = c(0,1),xaxt="n", xlim=c(2190,2525), cex.lab=1.1)
+axis(side=1, at=c(2190,2222,2250,2281,2311,2342,2372,2403,2434,2464,2495,2525), labels=NA,las=0)
+#plotting average monthly frond densities (and standard deviation) of severe years
+par(mai=c(0.35,0.8,0.05,0.1))
+plot(month.1,severe_means, ylim=c(0,1),type='o',xlab = NA,ylab = 'Mean normalized frond density', xaxt="n", yaxt="n", cex.lab=1.1, pch=16)
+arrows(1, severe_means[1],1,severe_means[1]+SE_severe.01, angle=90, length=.05)
+arrows(1, severe_means[1],1,severe_means[1]-SE_severe.01,angle=90, length=.05)
+arrows(2, severe_means[2],2,severe_means[2]+SE_severe.02,angle=90, length=.05)
+arrows(2, severe_means[2],2,severe_means[2]-SE_severe.02,angle=90, length=.05)
+arrows(3, severe_means[3],3,severe_means[3]+SE_severe.03,angle=90, length=.05)
+arrows(3, severe_means[3],3,severe_means[3]-SE_severe.03,angle=90, length=.05)
+arrows(4, severe_means[4],4,severe_means[4]+SE_severe.04,angle=90, length=.05)
+arrows(4, severe_means[4],4,severe_means[4]-SE_severe.04,angle=90, length=.05)
+arrows(5, severe_means[5],5,severe_means[5]+SE_severe.05,angle=90, length=.05)
+arrows(5, severe_means[5],5,severe_means[5]-SE_severe.05,angle=90, length=.05)
+arrows(6, severe_means[6],6,severe_means[6]+SE_severe.06,angle=90, length=.05)
+arrows(6, severe_means[6],6,severe_means[6]-SE_severe.06,angle=90, length=.05)
+arrows(7, severe_means[7],7,severe_means[7]+SE_severe.07,angle=90, length=.05)
+arrows(7, severe_means[7],7,severe_means[7]-SE_severe.07,angle=90, length=.05)
+arrows(8, severe_means[8],8,severe_means[8]+SE_severe.08,angle=90, length=.05)
+arrows(8, severe_means[8],8,severe_means[8]-SE_severe.08,angle=90, length=.05)
+arrows(9, severe_means[9],9,severe_means[9]+SE_severe.09,angle=90, length=.05)
+arrows(9, severe_means[9],9,severe_means[9]-SE_severe.09,angle=90, length=.05)
+arrows(10, severe_means[10],10,severe_means[10]+SE_severe.10,angle=90, length=.05)
+arrows(10, severe_means[10],10,severe_means[10]-SE_severe.10,angle=90, length=.05)
+arrows(11, severe_means[11],11,severe_means[11]+SE_severe.11,angle=90, length=.05)
+arrows(11, severe_means[11],11,severe_means[11]-SE_severe.11,angle=90, length=.05)
+arrows(12, severe_means[12],12,severe_means[12]+SE_severe.12,angle=90, length=.05)
+arrows(12, severe_means[12],12,severe_means[12]-SE_severe.12,angle=90, length=.05)
+axis(side=1, at=c(1,2,3,4,5,6,7,8,9,10,11,12), labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), las=1)
+mtext("b) Average severe year: monthly means vs model", side=3, line=0, cex=.8, adj=0)
+#plotting the average frond densities and 95% CIs from the severe year ensemble run
+par(mai=c(0.35,0.8,0.05,0.1))
+plot(x=tset.2.1, y = A.simu.ensemble$mean, type = 'l', col='palegreen3',las = 1, lwd=2, xlab = NA, ylab = 'Mean Frond Density',xlim=c(1095,1430), ylim = c(0,1),xaxt="n", cex.lab=1.1)
+lines(x = tset.2.1, y = A.simu.ensemble$plus_CI,type = 'l', col='palegreen3',las = 1, lwd=1.5, lty=2)
+lines(x = tset.2.1, y = A.simu.ensemble$minus_CI,type = 'l', col='palegreen3',las = 1, lwd=1.5, lty=2)
+axis(side=1, at=c(1095,1127,1155,1186,1216,1247,1277,1308,1339,1369,1400,1430), labels=NA,las=0)
+#plotting monthly frond densities from an individual severe year (2010)
+par(mai=c(0.4,0.8,0.05,0.1))
+plot(mohk_2010, type='o', ylim=c(0,10),xlab = NA,ylab = 'Frond density', xaxt="n", las=1, pch=16, cex.lab=1.1)
+axis(side=1, at=c(1,2,3,4,5,6,7,8,9,10,11,12), labels=c("J","F","M","A","M","J","J","A","S","O","N","D"),las=0, cex.axis=0.9, cex.lab=1.1)
+mtext("Month", side=1, line=2, cex=0.8)
+mtext("c) Severe year: individual year vs model", side=3, line=0, cex=.8, adj=0)
+#plotting a severe year of the model simulation in which a severe storm occurred at approximately the same time as the one in 2010
+par(mai=c(0.4,0.8,0.05,0.1))
+plot(x = tset.3.1, y = A.simu.3, type = 'l', col='palegreen3',las = 1, lwd=2, xlab = NA, ylab = 'Frond density', ylim = c(0,1),xaxt="n", xlim=c(1095,1430), cex.lab=1.1)
+axis(side=1, at=c(1095,1127,1155,1186,1216,1247,1277,1308,1339,1369,1400,1430), labels=c("J","F","M","A","M","J","J","A","S","O","N","D"),las=0, cex.axis=0.9)
+mtext("Month", side=1, line=2, cex=0.8)
+#dev.off()
+
+
+```
+
+
+
+#Understory macroalgae and sessile invertebrate abundance in mild vs severe years (Figure 3) 
+
+
+```{r}
+#model simulations for Figure 3a: simulate model over 15 years with severe storms occurring once every four years
+
+#for the mild year in Fig. 3a, the time points used are from year 14 (starting on day 5110)
+#for the severe year, the time points used are from year 11 (starting on day 4015, severe storm occurs on day 4075)
+#in these two years, record the summer abundance of M and I. Use July 15 as "sampling" date (this corresponds to day 5307 for the mild year and day 4212 for severe year), but because the time steps in M.simu and I.simu are in smaller intervals than days, the time in days needs to be converted to the corresponding element of these simulations using the following equation: 
+#time point in simu = (time in days)*(# of intervals)/(# of days)
+#for the below simulation, the number of days is 5476 (because tset.4.0 is a sequence from 0 to 5475) and the number of intervals is the length of tset.4.1 (83416) so day 5307 corresponds approximately to element 80841 of I.simu and M.simu and day 4212 corresponds to element 64161 of I.simu and M.simu
+
+
+#for the different scouring scenarios, this same simulation is re-run with a different psi.b each time  
+
+psi.A.mild<-.95
+psi.A.sev<-0
+
+#outer for loop: vector of psi.b values, storage vectors for the simulations of M and I with each psi.b
+psi.b.set<-c(1, 0.1, 0) #1 for no scouring, 0.1 for intermediate scouring, and 0 for proportional scouring 
+I.mild_summer_set<-psi.b.set*NaN
+I.severe_summer_set<-psi.b.set*NaN
+M.mild_summer_set<-psi.b.set*NaN
+M.severe_summer_set<-psi.b.set*NaN
+
+tset.4.0<- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155, 2615, 4075)
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+tset.4.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.4.0)))
+
+for(j in 1:length(psi.b.set)){
+  
+t_sen_set<-NaN*tset.4.1;t_sen_set[1]<-0
+a_t <- NaN*tset.4.1;a_t[1]<-0
+sA_set <- NaN*tset.4.1; sA_set[1]<- 0
+f_syn <- NaN*tset.4.1 
+
+G.simu.4 <- NaN*tset.4.1; G.simu.4[1]<-G0
+J.simu.4 <- NaN*tset.4.1; J.simu.4[1]<-J0
+A.simu.4 <- NaN*tset.4.1; A.simu.4[1]<-A0
+M.simu.4 <- NaN*tset.4.1; M.simu.4[1]<-M0
+I.simu.4 <- NaN*tset.4.1; I.simu.4[1] <- I0
+psi.simu<-NaN*tset.4.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.4.1)){
+  dt <- tset.4.1[i]-tset.4.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.4[i-1]
+	J <- J.simu.4[i-1]
+	A <- A.simu.4[i-1]
+	M <- M.simu.4[i-1] 
+	I <- I.simu.4[i-1]
+	
+if(tset.4.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.4.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.4[i]<-1*J 
+    A.simu.4[i]<-psi.A.mild*A
+    M.simu.4[i]<-1*M
+    I.simu.4[i]<-1*I
+    
+  } else if (tset.4.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev
+    J.simu.4[i]<-psi.b.set[j]*J
+    A.simu.4[i]<-psi.A.sev*A
+    M.simu.4[i]<-psi.b.set[j]*M
+    I.simu.4[i]<-psi.b.set[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.4[i] <- J + dJ
+  A.simu.4[i] <- A + dA
+  M.simu.4[i] <- M + dM
+	I.simu.4[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.4[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+I.mild_summer_set[j]<-I.simu.4[80841]
+I.severe_summer_set[j]<-I.simu.4[64161]
+M.mild_summer_set[j]<-M.simu.4[80841]
+M.severe_summer_set[j]<-M.simu.4[64161]
+
+}
+
+
+```
+
+
+```{r}
+#naming the values from each scouring scenario: no scouring = ns, intermediate scouring of all (J, M, and I) = sa, Proportional scouring of all = sa2
+
+#no scouring scenario (psi.b=1)
+I.mild_summer_ns<-I.mild_summer_set[1]
+M.mild_summer_ns<-M.mild_summer_set[1]
+
+I.severe_summer_ns<-I.severe_summer_set[1]
+M.severe_summer_ns<-M.severe_summer_set[1]
+
+#intermediate scouring scenario (psi.b=0.1)
+I.mild_summer_sa<-I.mild_summer_set[2]
+M.mild_summer_sa<-M.mild_summer_set[2]
+
+I.severe_summer_sa<-I.severe_summer_set[2]
+M.severe_summer_sa<-M.severe_summer_set[2]
+
+#proportional scouring scenario (psi.b=0) 
+I.mild_summer_sa2<-I.mild_summer_set[3]
+M.mild_summer_sa2<-M.mild_summer_set[3]
+
+I.severe_summer_sa2<-I.severe_summer_set[3]
+M.severe_summer_sa2<-M.severe_summer_set[3]
+
+
+#rearrange these values into a matrix so they can be displayed as a bar graph
+#note that since mild storms do not scour the benthos in any scenario, the mild year values are similar in all scenarios. Therefore, for simplicity, the mild year values from the no scouring scenario were used as the mild year values in Figure 3
+
+all_scouring_matrix<-matrix(c(I.mild_summer_ns,M.mild_summer_ns,I.severe_summer_ns,M.severe_summer_ns,I.severe_summer_sa,M.severe_summer_sa,I.severe_summer_sa2,M.severe_summer_sa2), nrow=4, byrow=TRUE, dimnames=list(c("Mild","Severe, No Scouring", "Severe, Intermediate Scouring", "Severe, Proportional Scouring"), c("Invertebrates", "Macroalgae")))
+
+```
+
+
+
+```{r}
+#Comparing benthic cover in mild and severe years using SBC LTER data (Figure 3b)
+#import the SBC LTER data set "Annual_Cover_All_Years_20181127.csv", name it invert_algae
+
+library(readr)
+invert_algae <- read_csv("Annual_Cover_All_Years_20181127.csv")
+
+
+```
+
+```{r}
+#the data is given as follows: for each sample date, the percent cover of each species at each location is given, where each location is a combination of the transect #, quad #, and side (inshore vs offshore)
+#for Figure 3, want the total sessile invert and understory macroalgal cover (i.e. the sum of the cover of all invert and algal species, respectively) at each unique location on each sample date; can then take the average of these values for the sample dates in mild and severe years
+
+hold <- invert_algae[invert_algae$SITE=="MOHK",]#subset out the data from Mohawk reef
+hold$Quad.ID <- paste(hold$TRANSECT,hold$QUAD,hold$SIDE,sep='.')#make new variable Quad.ID using paste- so Quad.ID is trans.quad.side
+hold$Quad.ID.Year <- paste(hold$Quad.ID,hold$YEAR,sep='.')#add year (sample date) to the quad ID values
+
+#create new data frame in which each unique element of Quad.ID.Year is a row and the year in which the data were sampled, the total invert and macroalgal cover at each unique Quad.ID.year value, and the type of year (mild vs severe) are columns
+quad.cover <- as.data.frame(unique(hold$Quad.ID.Year))
+colnames(quad.cover) <- 'Quad.ID.Year'
+quad.cover$Year <- hold$YEAR[match(quad.cover$Quad.ID.Year,hold$Quad.ID.Year)]
+quad.cover$Invert.Cover <- NaN 
+quad.cover$Mac.Cover <- NaN
+quad.cover$Year.Type <- NaN
+
+#for each unique Quad.ID.year (quad, transect, I vs O, year/sample date), fill in the sum of the % cover of all sessile inverts in the Invert.Cover columm, the sum of the macroalgae %cover in the Mac.Cover column, and whether or not the year is mild, severe, or neither (NaN) in the Year.Type column 
+for(i in 1:dim(quad.cover)[1]){
+  choice <- quad.cover$Quad.ID.Year[i]
+  hold.site <- hold[hold$Quad.ID.Year==choice,]
+  hold.inv <- hold.site[hold.site$GROUP=='INVERT',]
+  hold.inv <- hold.inv[hold.inv$PERCENT_COVER!=-99999,]#do not include NaN (99999) entries
+  hold.inv<-hold.inv[hold.inv$MOBILITY!='MOBILE',]#do not include mobile invert species
+  quad.cover$Invert.Cover[i] <- sum(hold.inv$PERCENT_COVER)
+  
+  hold.mac <- hold.site[hold.site$GROUP=='ALGAE',]
+  hold.mac <- hold.mac[hold.mac$PERCENT_COVER!=-99999,]#do not include NaN (99999) entries
+  hold.mac <- hold.mac[hold.mac$SCIENTIFIC_NAME!='Macrocystis pyrifera',]#do not include Macrocystis pyrifera
+  quad.cover$Mac.Cover[i] <- sum(hold.mac$PERCENT_COVER)
+  
+  # Assigning year type 
+  if(quad.cover$Year[i] %in% c(2007,2009,2011,2015)){
+    quad.cover$Year.Type[i] <- 'Mild'
+  }
+  
+  if(quad.cover$Year[i] %in% c(2006,2008,2010,2014)){
+    quad.cover$Year.Type[i] <- 'Severe'
+  }
+  
+}
+
+
+#to make it easier to perform statistical tests on these data, make new data frame similar to quad.cover, except all percent cover values are in one column ("Cover"), and another column ("Taxon") identifies whether these values are for inverts or macroalgae
+plot.cover <- as.data.frame(cbind(c(as.character(quad.cover$Quad.ID.Year),as.character(quad.cover$Quad.ID.Year)),c(quad.cover$Year,quad.cover$Year),c(quad.cover$Invert.Cover,quad.cover$Mac.Cover),c(quad.cover$Year.Type,quad.cover$Year.Type),c(rep('Invertebrates',dim(quad.cover)[1]),rep('Macroalgae',dim(quad.cover)[1]))))
+
+colnames(plot.cover) <- c('Quad.ID.Year','Year','Cover','Year.Type','Taxon')
+
+plot.cover$Cover <- as.numeric(as.character(plot.cover$Cover))
+
+#subset the above data frame to make one that only includes data from severe and mild years
+plot.cover.2 <- plot.cover[plot.cover$Year.Type!='NaN',]
+
+
+#run Tukey HSD and two sammple t tests on the data to look for significant differences in invert and macroalgal cover in mild and severe years; note that only the results of the t test were reported in the paper
+TukeyHSD(aov(Cover ~ Taxon*Year.Type,data=plot.cover.2))
+
+t.test(Cover~Year.Type,data=plot.cover.2[plot.cover.2$Taxon=='Invertebrates',])
+t.test(Cover~Year.Type,data=plot.cover.2[plot.cover.2$Taxon=='Macroalgae',])
+
+```
+
+#Plotting Figure 3
+
+```{r, fig.height=4, fig.width=6}
+require(sciplot)
+
+#tiff(filename="Fig3.tif", height=4, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mfrow=c(1,2), omi=c(0.5,0.5,0.1,0.1))
+layout(matrix(c(1,1,1,2,2),nrow=1,ncol=5))
+#layout.show(2)
+par(mai=c(.4,.4,.1,0.05))
+barplot(all_scouring_matrix*100,xlab=NA, ylab=NA,yaxt="n", col=c("#4D4D4D", "gray70", "white", "gray70"),density=c(1000,15,1000,30),angle=c(30,45,30,135), main="a) Model output", adj=0, ylim=c(0,120), beside=TRUE,legend=TRUE, args.legend=list(x="topleft", bty="n",cex=1.3))
+mtext("   Summer % cover", side=2, cex=0.8, outer=TRUE)
+axis(side=2, at=c(0,40,80,120),las=1)
+abline(h=0)
+par(mai=c(.4,0.05,.1,.1))
+bargraph.CI(Taxon,Cover,Year.Type,data=plot.cover.2,col=c("#4D4D4D","white"),legend=TRUE,cex.leg=1.3,x.leg=1,las=1,ylim=c(0,120),y.leg=115,ylab=NA,xlab=NA,yaxt='n', main='b) LTER data', adj=0); text(5,116,'***',cex=2)
+text(2, 62,'***', cex=2)#bar graph of means and confidence intervals
+axis(side=2, at=c(0,40,80,120), labels=NA,las=1)
+abline(h=0)
+mtext("    Benthic group", side=1, cex=0.8, outer=TRUE)
+#dev.off()
+
+```
+
+
+#Comparing time series from model simulations and SBC LTER data (Figure 4)
+
+```{r}
+#import the SBC LTER data set "LTE_Cover_All_Years_20181214.csv" 
+
+library(readr)
+LTE_cover <- read_csv("LTE_Cover_All_Years_20181214.csv")
+
+#subset into data from control site at Mohawk only
+mohk_LTE_cover<-subset(LTE_cover, LTE_cover$SITE=="MOHK")
+mohk_control_cover<-subset(mohk_LTE_cover, mohk_LTE_cover$TREATMENT=="CONTROL")
+```
+
+
+
+
+```{r}
+#as for the annual cover data used in Figure 3, need to rearrange the data in order to get the total sessile invert and understory macroalgal cover at each unique location on each sample date, (will then take the average cover across all locations for each sample date in order to make the time series)
+#the following code is similar to that used for rearranging the Annual Cover data set
+mohk_control_cover$Quad.ID <- paste(mohk_control_cover$TRANSECT,mohk_control_cover$QUAD,mohk_control_cover$SIDE,sep='.')
+mohk_control_cover$Quad.ID.Date <- paste(mohk_control_cover$Quad.ID,mohk_control_cover$DATE,sep='.')
+
+quad.cover2 <- as.data.frame(unique(mohk_control_cover$Quad.ID.Date))
+colnames(quad.cover2) <- 'Quad.ID.Date'
+quad.cover2$Date <- mohk_control_cover$DATE[match(quad.cover2$Quad.ID.Date,mohk_control_cover$Quad.ID.Date)]
+quad.cover2$Invert.Cover <- NaN
+quad.cover2$Mac.Cover <- NaN
+
+for(i in 1:dim(quad.cover2)[1]){
+  choice <- quad.cover2$Quad.ID.Date[i]
+  hold.site <- mohk_control_cover[mohk_control_cover$Quad.ID.Date==choice,]
+  hold.inv <- hold.site[hold.site$GROUP=='INVERT',]
+  hold.inv <- hold.inv[hold.inv$PERCENT_COVER!=-99999,]
+  hold.inv<-hold.inv[hold.inv$MOBILITY!='MOBILE',]
+  quad.cover2$Invert.Cover[i] <- sum(hold.inv$PERCENT_COVER)
+  
+  hold.mac <- hold.site[hold.site$GROUP=='ALGAE',]
+  hold.mac <- hold.mac[hold.mac$PERCENT_COVER!=-99999,]
+  hold.mac <- hold.mac[hold.mac$SCIENTIFIC_NAME!='Macrocystis pyrifera',]
+  quad.cover2$Mac.Cover[i] <- sum(hold.mac$PERCENT_COVER)
+  
+}
+
+
+#for each date, want to take the average of the invert and algal cover at each unique location (transect, quad, side combination)
+
+#create new data frame out of quad.cover2 in which each sample date is a row and the average invert and algal cover are columns
+quad.cover3 <- as.data.frame(unique(quad.cover2$Date))
+colnames(quad.cover3) <- 'Date'
+quad.cover3$Invert.Cover.Avg <- NaN
+quad.cover3$Mac.Cover.Avg <- NaN
+
+#for each date, fill in the average of all unique sites of all the invert %cover in the Invert.Cover column and the algae %cover in the Mac.Cover column
+for(i in 1:dim(quad.cover3)[1]){
+  choice <- quad.cover3$Date[i]
+  hold.site <- quad.cover2[quad.cover2$Date==choice,]
+  quad.cover3$Invert.Cover.Avg[i] <- mean(hold.site$Invert.Cover,na.rm=TRUE)
+  quad.cover3$Mac.Cover.Avg[i] <- mean(hold.site$Mac.Cover,na.rm=TRUE)
+  
+}
+
+
+#converting sample dates to number of days since 1/1/08 (for exact alignment with model simulation)
+actual_dates<-as.Date(quad.cover3$Date)
+all_dates<-c(as.Date(c("2008-01-01")), actual_dates)
+quad.cover3$numeric_day<-NaN
+day_x<-c(1:63)*NaN#length(actual_dates)=63
+
+for(i in 1:length(actual_dates)){
+day_x[i]<-actual_dates[i]-all_dates[1]
+day_x[i]<-as.numeric(day_x[i])
+  
+quad.cover3$numeric_day[i]<-day_x[i]+1  
+  
+}
+
+
+```
+
+
+```{r}
+#getting data on frond density at Mohawk during this same time interval
+
+#subsetting out just frond density and date from the Mohawk kelp data 
+sub_frond_dens<-c(mohk_kelp$Frond_density[66:196])#element 66= 1/2/2008, element 196=11/2/2018
+mohk_kelp_subset<-data.frame(mohk_kelp$date[66:196],sub_frond_dens)
+colnames(mohk_kelp_subset)<-c("date","frond_dens")
+
+
+actual_dates2<-as.Date(mohk_kelp_subset$date)
+all_dates2<-c(as.Date(c("2008-01-01")), actual_dates2)
+mohk_kelp_subset$numeric_day<-NaN
+day_x2<-NaN*c(1:length(mohk_kelp_subset$date))
+
+for(i in 1:length(actual_dates2)){
+day_x2[i]<-actual_dates2[i]-all_dates2[1]
+day_x2[i]<-as.numeric(day_x2[i])
+  
+mohk_kelp_subset$numeric_day[i]<-day_x2[i]+1  
+  
+}
+
+
+```
+
+
+
+
+```{r}
+#model simulation of a storm regime similar to the one that occurred between Jan 2008 and Nov 2018 (the interval over which the LTE data was collected)
+#use same 15 year model simulation but make the first day of year 3 (day 1095) equivalent to 1/1/2008
+#from the CDIP swell data, severe storms (max wave height of at least 2.5m) occurred on 2/25/08 (simulation day 1150), on 2/28/2010 (simulation day 1884), and on 3/1/14 (simulation day 3346)
+
+psi.A.mild<-.95
+psi.A.sev<-0
+psi.b<-0.1 #use intermediate scouring scenario
+
+tset.5.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1149,1430:1515,1795:1883,2160:2245,2525:2610,2890:2975,3255:3345,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1150,1884,3346)
+tset.5.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.5.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+t_sen_set<-NaN*tset.5.1;t_sen_set[1]<-0
+a_t <- NaN*tset.5.1;a_t[1]<-0
+sA_set <- NaN*tset.5.1; sA_set[1]<- 0
+f_syn <- NaN*tset.5.1
+G.simu.5 <- NaN*tset.5.1; G.simu.5[1]<-G0
+J.simu.5 <- NaN*tset.5.1; J.simu.5[1]<-J0
+A.simu.5 <- NaN*tset.5.1; A.simu.5[1]<-A0
+M.simu.5 <- NaN*tset.5.1; M.simu.5[1]<-M0
+I.simu.5 <- NaN*tset.5.1; I.simu.5[1] <- I0
+psi.simu<-NaN*tset.5.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.5.1)){
+  dt <- tset.5.1[i]-tset.5.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.5[i-1]
+	J <- J.simu.5[i-1]
+	A <- A.simu.5[i-1]
+	M <- M.simu.5[i-1] 
+	I <- I.simu.5[i-1]
+	
+if(tset.5.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+		
+		
+  if(tset.5.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.5[i]<-1*J 
+    A.simu.5[i]<-psi.A.mild*A
+    M.simu.5[i]<-1*M
+    I.simu.5[i]<-1*I
+    
+  } else if (tset.5.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev
+    J.simu.5[i]<-psi.b*J
+    A.simu.5[i]<-psi.A.sev*A
+    M.simu.5[i]<-psi.b*M
+    I.simu.5[i]<-psi.b*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.5[i] <- J + dJ
+  A.simu.5[i] <- A + dA
+  M.simu.5[i] <- M + dM
+	I.simu.5[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.5[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+```
+
+
+#Plotting Figure 4
+
+```{r}
+#plotting Figure 4
+#tiff(filename="Fig4.tif", height=5, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mfrow=c(2,1))
+par(mar=c(1,3.8,4,3.1))#1,3.8,4,3.1
+plot(x=quad.cover3$numeric_day, y=quad.cover3$Invert.Cover.Avg,type = "o", col='royalblue1',las = 2, lwd=1,xlab=NA, ylab = NA, ylim=c(0,300), xaxt="n", yaxt="n", pch=16, cex=0.4, lty=1)
+lines(x = quad.cover3$numeric_day, y = quad.cover3$Mac.Cover.Avg,type = 'o', col = 'chocolate1', lwd = 1, pch=16, cex=0.4)
+lines(x=mohk_kelp_subset$numeric_day,y=mohk_kelp_subset$frond_dens*10 +130, type="o",lwd=1, col='palegreen3', pch=16, cex=0.4)
+abline(v=56, lwd=1)
+abline(v=790, lwd=1)
+abline(v=2252, lwd=1)
+axis(side=1, at=c(0,365,730,1095,1460,1825,2190,2555,2920,3285,3650,4015), labels=NA)
+axis(side=2, at=c(0,50,100), labels=c(0,50,100),las=1, cex.axis=0.6)
+axis(side=4, at=c(130,205,280), labels=c(0,7.5,15),las=1, cex.axis=0.6)#labels=c(0,7.5,15)
+mtext("Mean percent cover", side=2, line=2, cex=0.65)
+mtext("Frond density", side=4, line=2, cex=0.65)
+mtext("a)", side=2, cex=0.9, adj=1, line=3, las=1, at=340)
+legend("topleft", c("Sessile invertebrates (% cover)", "Understory macroalgae (% cover)", "Giant kelp (frond density)"), col=c("royalblue1","chocolate1","palegreen3"),  lwd=2, cex=0.66, bty="n", xpd=NA, ncol=3, inset=c(-0.11,-0.25))
+par(mar=c(4,3.8,1,3.1))#4,3.8,1,3.1
+plot(x = tset.5.1, y = I.simu.5*100, type = 'l', col='royalblue1',las = 1, lwd=1, xlab = NA, xlim=c(1095,5058), ylim = c(0,200), xaxt="n", yaxt="n", ylab=NA)
+lines(x = tset.5.1, y = M.simu.5*100, col = 'chocolate1', lwd = 1)
+lines(x = tset.5.1, y = A.simu.5*100+100, col = 'palegreen3', lwd = 1)
+abline(v=1150, lwd=1)
+abline(v=1884, lwd=1)
+abline(v=3346, lwd=1)
+axis(side=1, at=c(1095,1460,1825,2190,2555,2920,3285,3650,4015,4380,4745,5110), labels=c(2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019),las=0, cex.axis=0.6)
+axis(side=2, at=c(0,50,100), labels=c(0,50,100),las=1, cex.axis=0.6)
+axis(side=4, at=c(100,150,200), labels=c(0,0.5,1),las=1, cex.axis=0.6)
+mtext("Frond density", side=4, line=2, cex=0.65)
+mtext("Percent cover", side=2, line=2, cex=0.65)
+mtext("Year", side=1, line=2, cex=0.65)
+mtext("b)", side=2, cex=0.9, adj=1, line=3, las=1, at=200)
+#dev.off()
+
+```
+
+
+
+#Sensitivity analysis: storm frequency and intensity (Figure 5, Appendix S1: Figures S5, S6, S7)
+```{r}
+#varying frequency (major storm every 5,4,3,2 and 1 years), intensity (psi.A.sev= 0.3,0.2,0.1,0.01,0), and scouring scenario (none, intermediate, and proportional; for intermediate and proportional have both scouring of juvenile sporophytes, understory macroalgae, and sessile inverts as well as scouring of juvenile sporophytes only)
+#have separate simulations for each frequency, but run the same frequency simulation with a range of storm intensities and scouring scenarios 
+
+
+#organizing the different scouring scenarios:
+#the scouring scenarios used are no scouring (ns), intermediate scouring all (sa1), proportional scouring all (sa2), intermediate scouring of juvenile sporophytes only (sj1), proportional scouring of juvenile sporophytes only (sj2)
+#the following matrices show the values of psi.b for juvenile sporophytes (psi.b.J) and for understory macroalgae and sessile inverts (psi.b.MI) used for each scouring scenario (each matrix corresponds to a different value of psi.A):
+intensity.0.3<-matrix(c(1,1,1,1,1,1,0.3,0.3,1,0.3), nrow=5, byrow=TRUE, dimnames=list(c("No Scouring (ns)","intermediate Scouring All (sa1)", "intermediate Scouring J Only (sj1)","Proportional Scouring All (sa2)","Proportional Scouring J Only (sj2)"), c("psi.b.MI", "psi.b.S")))
+intensity.0.2<-matrix(c(1,1,1,1,1,1,0.2,0.2,1,0.2), nrow=5, byrow=TRUE, dimnames=list(c("No Scouring (ns)","intermediate Scouring All (sa1)","intermediate Scouring J Only (sj1)", "Proportional Scouring All (sa2)", "Proportional Scouring J Only (sj2)"), c("psi.b.MI", "psi.b.S")))
+intensity.0.1<-matrix(c(1,1,0.9,0.9,1,0.9,0.1,0.1,1,0.1), nrow=5, byrow=TRUE, dimnames=list(c("No Scouring (ns)","intermediate Scouring All (sa1)", "intermediate Scouring J Only (sj1)","Proportional Scouring All (sa2)", "Proportional Scouring J Only (sj2)"), c("psi.b.MI", "psi.b.S")))
+intensity.0.01<-matrix(c(1,1,0.5,0.5,1,0.5,0.01,0.01,1,0.01), nrow=5, byrow=TRUE, dimnames=list(c("No Scouring (ns)","intermediate Scouring All (sa1)", "intermediate Scouring J Only (sj1)","Proportional Scouring All (sa2)","Proportional Scouring J Only (sj2)"), c("psi.b.MI", "psi.b.S")))
+intensity.0<-matrix(c(1,1,0.1,0.1,1,0.1,0,0,1,0), nrow=5, byrow=TRUE, dimnames=list(c("No Scouring (ns)","Intermediate Scouring All (sa1)", "Intermediate Scouring J Only (sj1)","Proportional Scouring All (sa2)","Proportional Scouring J Only (sj2)"), c("psi.b.MI", "psi.b.S")))
+
+
+intensity.0.3#when psiA=0.3
+intensity.0.2#when psiA=0.2
+intensity.0.1#when psiA=0.1
+intensity.0.01#whn psiA=0.01
+intensity.0#when psiA=0
+
+```
+
+
+```{r}
+
+#the following model simulations each correspond to a different storm frequency (one severe storm every 5, 4, 3, 2, or 1 years). In each simulation, the intensity and level of scouring of these severe storms is varied (see the above matrices for the exact values used)
+
+
+#below are the sets of values of psi.A.sev (proportion of adult fronds remaining after a severe storm; psiA for severe storms), psi.b.MI (proportion of understory macroalgae and sessile inverts remaining after a storm), and psi.b.J (proportion of juvenile  sporophytes remaining after a storm) for each combination of storm intensity and scouring scenario. The intensities go from 0.3 to 0 and the scouring scenarios are ordered as No scouring (ns), Intermediate scouring all (sa1), Intermediate scouring of juvenile sporophytes only (sj1), Proportional scouring all (sa2), Proportional scouring juvenile sporophytes only (sj2)
+#note that for psi.A.sev values 0.3 and 0.2, psi.b.S and psi.b.MI are 1 in both the no scouring and Intermediate scouring scenarios so the 0.3 ns simulations are equivalent to the 0.3 sa1 and 0.3 sj1 simulations, and the 0.2 ns simulations are equivalent to the 0.2 sa1 and 0.2 sj1 simulations. Therefore, only No scouring and Proportional scouring simulations were run for the 0.3 and 0.2 intensities 
+
+psi.A.sev.set<-c(0.3,0.3,0.3,0.2,0.2,0.2,0.1,0.1,0.1,0.1,0.1,0.01,0.01,0.01,0.01,0.01,0,0,0,0,0)
+psi.b.MI.set<-c(1,0.3,1,1,0.2,1,1,0.9,1,0.1,1,1,0.5,1,0.01,1,1,0.1,1,0,1)
+psi.b.J.set<-c(1,0.3,0.3,1,0.2,0.2,1,0.9,0.9,0.1,0.1,1,0.5,0.5,0.01,0.01,1,0.1,0.1,0,0)
+
+psi.A.mild<-.95#mild storms do not vary in intensity
+
+#to get the average values of A, M, and I under each storm regime (i.e. unique combination of storm frequency, intensity (=psi.A.sev), and scouring scenario), took the average of the abundance of each group on all days between July 1 and Oct 1 in all years in a single storm cycle (year of a severe storm to the last year before the next severe storm)
+
+```
+
+
+```{r}
+#frequency of 1 severe storm every 5 years
+
+#holding vectors for the values that will be collected for each intensity/scouring scenario combination run at this storm frequency 
+A.5.mean_set<-psi.A.sev.set*NaN
+I.5.mean_set<-psi.A.sev.set*NaN
+M.5.mean_set<-psi.A.sev.set*NaN
+log.M.I.5_set<-psi.A.sev.set*NaN
+
+
+tset.6.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,2980,4805)
+tset.6.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.6.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+#external for loop: tells this simulation to repeat for every element in psi.A.sev.set
+for(j in 1:length(psi.A.sev.set)){
+
+t_sen_set<-NaN*tset.6.1;t_sen_set[1]<-0
+a_t <- NaN*tset.6.1;a_t[1]<-0
+sA_set <- NaN*tset.6.1; sA_set[1]<- 0
+f_syn <- NaN*tset.6.1 
+G.simu.6 <- NaN*tset.6.1; G.simu.6[1]<-G0
+J.simu.6 <- NaN*tset.6.1; J.simu.6[1]<-J0
+A.simu.6 <- NaN*tset.6.1; A.simu.6[1]<-A0
+M.simu.6 <- NaN*tset.6.1; M.simu.6[1]<-M0
+I.simu.6 <- NaN*tset.6.1; I.simu.6[1] <- I0
+psi.simu<-NaN*tset.6.1; psi.simu[1:2]<-0
+
+
+#inner for loop: simulation of the model at the storm intensity/scouring scenario determined by the element of psi.A.sev (and psi.b.J and psi.b.MI) reached by the outer for loop 
+for(i in 2:length(tset.6.1)){
+  dt <- tset.6.1[i]-tset.6.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.6[i-1]
+	J <- J.simu.6[i-1]
+	A <- A.simu.6[i-1]
+	M <- M.simu.6[i-1] 
+	I <- I.simu.6[i-1]
+	
+if(tset.6.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+		
+  if(tset.6.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.6[i]<-1*J 
+    A.simu.6[i]<-psi.A.mild*A
+    M.simu.6[i]<-1*M
+    I.simu.6[i]<-1*I
+    
+  } else if (tset.6.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev.set[j]#the storm intensity and scouring scenario are determined by the current element of psi.A.sev.set, psi.b.J.set, and psi.b.MI.set 
+    J.simu.6[i]<-psi.b.J.set[j]*J
+    A.simu.6[i]<-psi.A.sev.set[j]*A
+    M.simu.6[i]<-psi.b.MI.set[j]*M
+    I.simu.6[i]<-psi.b.MI.set[j]*I
+    
+  } else {
+     psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.6[i] <- J + dJ
+  A.simu.6[i] <- A + dA
+  M.simu.6[i] <- M + dM
+	I.simu.6[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.6[i] <- G + dG
+  sA_set[i] <- sA
+}#end the inner for loop
+
+#now, save the desired values from the model simulation
+#for a frequency of one severe storm every five years, the dates used to get the average values of A, M, and I were 7/1 to 10/1 of years 8,9,10,11, and 12 (corresponding to days 3102-3194, 3476-3559,3832-3924,4197-4289, and 4562-4658); these days were converted to the equivalent elements of the simulation using time point in simu = (time in days)*(# of intervals in simu)/(# of days in simu)
+hold.A<-c(A.simu.6[47261:48663],A.simu.6[52823:54224],A.simu.6[58384:59785],A.simu.6[63945:65346],A.simu.6[69506:70907])
+hold.I<-c(I.simu.6[47261:48663],I.simu.6[52823:54224],I.simu.6[58384:59785],I.simu.6[63945:65346],I.simu.6[69506:70907])
+hold.M<-c(M.simu.6[47261:48663],M.simu.6[52823:54224],M.simu.6[58384:59785],M.simu.6[63945:65346],M.simu.6[69506:70907])
+
+
+A.5.mean_set[j]<-mean(hold.A)#average value of A during this time period
+I.5.mean_set[j]<-mean(hold.I)#average value of I during this time period
+M.5.mean_set[j]<-mean(hold.M)#average value of M during this time period
+log.M.I.5_set[j]<-log(M.5.mean_set[j]/I.5.mean_set[j])#log of the ratio of the average values of M and I 
+
+}#end of outer for loop; the above repeats for each element of psi.A.sev  
+
+
+```
+
+
+```{r}
+#the values taken from these simulations (the average abundances of A, M, and I and the log of the ratio of the M and I averages) are labeled as variable.frequency.intensity.scouring_scenario, where the variables are A,M, I, and M_I (the log of M_mean/I_mean), the frequencies are 5 (severe storm every 5 years), 4, 3, 2, 1, the intensities are equivalent to the value of psi.A.sev in the simulation (from 0.3 to 0), and the scouring scenarios are ns (no scouring), sa1 (Intermediate scouring of J,M,and I), sj1 (Intermediate scouring of J only), sa2 (Proportional scouring of J, M, and I), and sj2 (Proportional scouring of J only); see the storm intensity matrices for the values of psi.b.J and psi.b.MI in each intensity/scouring scenario combination
+
+
+A.5.3.ns<-A.5.mean_set[1];A.5.3.sa2<-A.5.mean_set[2];A.5.3.sj2<-A.5.mean_set[3];A.5.2.ns<-A.5.mean_set[4];A.5.2.sa2<-A.5.mean_set[5];A.5.2.sj2<-A.5.mean_set[6];A.5.1.ns<-A.5.mean_set[7];A.5.1.sa1<-A.5.mean_set[8];A.5.1.sj1<-A.5.mean_set[9];A.5.1.sa2<-A.5.mean_set[10];A.5.1.sj2<-A.5.mean_set[11];A.5.01.ns<-A.5.mean_set[12];A.5.01.sa1<-A.5.mean_set[13];A.5.01.sj1<-A.5.mean_set[14];A.5.01.sa2<-A.5.mean_set[15];A.5.01.sj2<-A.5.mean_set[16];A.5.0.ns<-A.5.mean_set[17];A.5.0.sa1<-A.5.mean_set[18];A.5.0.sj1<-A.5.mean_set[19];A.5.0.sa2<-A.5.mean_set[20];A.5.0.sj2<-A.5.mean_set[21]
+
+I.5.3.ns<-I.5.mean_set[1];I.5.3.sa2<-I.5.mean_set[2];I.5.3.sj2<-I.5.mean_set[3];I.5.2.ns<-I.5.mean_set[4];I.5.2.sa2<-I.5.mean_set[5];I.5.2.sj2<-I.5.mean_set[6];I.5.1.ns<-I.5.mean_set[7];I.5.1.sa1<-I.5.mean_set[8];I.5.1.sj1<-I.5.mean_set[9];I.5.1.sa2<-I.5.mean_set[10];I.5.1.sj2<-I.5.mean_set[11];I.5.01.ns<-I.5.mean_set[12];I.5.01.sa1<-I.5.mean_set[13];I.5.01.sj1<-I.5.mean_set[14];I.5.01.sa2<-I.5.mean_set[15];I.5.01.sj2<-I.5.mean_set[16];I.5.0.ns<-I.5.mean_set[17];I.5.0.sa1<-I.5.mean_set[18];I.5.0.sj1<-I.5.mean_set[19];I.5.0.sa2<-I.5.mean_set[20];I.5.0.sj2<-I.5.mean_set[21]
+
+M.5.3.ns<-M.5.mean_set[1];M.5.3.sa2<-M.5.mean_set[2];M.5.3.sj2<-M.5.mean_set[3];M.5.2.ns<-M.5.mean_set[4];M.5.2.sa2<-M.5.mean_set[5];M.5.2.sj2<-M.5.mean_set[6];M.5.1.ns<-M.5.mean_set[7];M.5.1.sa1<-M.5.mean_set[8];M.5.1.sj1<-M.5.mean_set[9];M.5.1.sa2<-M.5.mean_set[10];M.5.1.sj2<-M.5.mean_set[11];M.5.01.ns<-M.5.mean_set[12];M.5.01.sa1<-M.5.mean_set[13];M.5.01.sj1<-M.5.mean_set[14];M.5.01.sa2<-M.5.mean_set[15];M.5.01.sj2<-M.5.mean_set[16];M.5.0.ns<-M.5.mean_set[17];M.5.0.sa1<-M.5.mean_set[18];M.5.0.sj1<-M.5.mean_set[19];M.5.0.sa2<-M.5.mean_set[20];M.5.0.sj2<-M.5.mean_set[21]
+
+M_I.5.3.ns<-log.M.I.5_set[1];M_I.5.3.sa2<-log.M.I.5_set[2];M_I.5.3.sj2<-log.M.I.5_set[3];M_I.5.2.ns<-log.M.I.5_set[4];M_I.5.2.sa2<-log.M.I.5_set[5];M_I.5.2.sj2<-log.M.I.5_set[6];M_I.5.1.ns<-log.M.I.5_set[7];M_I.5.1.sa1<-log.M.I.5_set[8];M_I.5.1.sj1<-log.M.I.5_set[9];M_I.5.1.sa2<-log.M.I.5_set[10];M_I.5.1.sj2<-log.M.I.5_set[11];M_I.5.01.ns<-log.M.I.5_set[12];M_I.5.01.sa1<-log.M.I.5_set[13];M_I.5.01.sj1<-log.M.I.5_set[14];M_I.5.01.sa2<-log.M.I.5_set[15];M_I.5.01.sj2<-log.M.I.5_set[16];M_I.5.0.ns<-log.M.I.5_set[17];M_I.5.0.sa1<-log.M.I.5_set[18];M_I.5.0.sj1<-log.M.I.5_set[19];M_I.5.0.sa2<-log.M.I.5_set[20];M_I.5.0.sj2<-log.M.I.5_set[21]
+
+```
+
+
+
+```{r}
+#repeating all of the above for a frequency of 1 severe storm every 4 years
+
+A.4.mean_set<-psi.A.sev.set*NaN
+I.4.mean_set<-psi.A.sev.set*NaN
+M.4.mean_set<-psi.A.sev.set*NaN
+log.M.I.4_set<-psi.A.sev.set*NaN
+
+tset.7.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155, 2615, 4075)
+tset.7.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.7.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+for(j in 1:length(psi.A.sev.set)){
+t_sen_set<-NaN*tset.7.1;t_sen_set[1]<-0
+a_t <- NaN*tset.7.1;a_t[1]<-0
+sA_set <- NaN*tset.7.1; sA_set[1]<- 0
+f_syn <- NaN*tset.7.1 
+
+G.simu.7 <- NaN*tset.7.1; G.simu.7[1]<-G0
+J.simu.7 <- NaN*tset.7.1; J.simu.7[1]<-J0
+A.simu.7 <- NaN*tset.7.1; A.simu.7[1]<-A0
+M.simu.7 <- NaN*tset.7.1; M.simu.7[1]<-M0
+I.simu.7 <- NaN*tset.7.1; I.simu.7[1] <- I0
+psi.simu<-NaN*tset.7.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.7.1)){
+  dt <- tset.7.1[i]-tset.7.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.7[i-1]
+	J <- J.simu.7[i-1]
+	A <- A.simu.7[i-1]
+	M <- M.simu.7[i-1] 
+	I <- I.simu.7[i-1]
+	
+if(tset.7.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+   a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.7.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.7[i]<-1*J 
+    A.simu.7[i]<-psi.A.mild*A
+    M.simu.7[i]<-1*M
+    I.simu.7[i]<-1*I
+    
+  } else if (tset.7.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev.set[j]
+    J.simu.7[i]<-psi.b.J.set[j]*J
+    A.simu.7[i]<-psi.A.sev.set[j]*A
+    M.simu.7[i]<-psi.b.MI.set[j]*M
+    I.simu.7[i]<-psi.b.MI.set[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.7[i] <- J + dJ
+  A.simu.7[i] <- A + dA
+  M.simu.7[i] <- M + dM
+	I.simu.7[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.7[i] <- G + dG
+  sA_set[i] <- sA
+}
+
+
+#the dates used to get the average values of A, M, and I were from 7/1 to 10/1 of years 11,12,13, and 14 (corresponding to days 4197-4289,4562-4658, 4927-5019, and 5292-5384); these days were converted to the equivalent elements of the simulation using time point in simu = (time in days)*(# of intervals in simu)/(# of days in simu)
+hold.A<-c(A.simu.7[63945:65346],A.simu.7[69506:70907], A.simu.7[75067:76468], A.simu.7[80628:82030])
+hold.I<-c(I.simu.7[63945:65346],I.simu.7[69506:70907],I.simu.7[75067:76468], I.simu.7[80628:82030])
+hold.M<-c(M.simu.7[63945:65346],M.simu.7[69506:70907],M.simu.7[75067:76468], M.simu.7[80628:82030])
+
+
+A.4.mean_set[j]<-mean(hold.A)
+I.4.mean_set[j]<-mean(hold.I)
+M.4.mean_set[j]<-mean(hold.M)
+log.M.I.4_set[j]<-log(M.4.mean_set[j]/I.4.mean_set[j])
+
+}
+
+
+```
+
+
+```{r}
+#labeling the values saved from the above simulations
+A.4.3.ns<-A.4.mean_set[1];A.4.3.sa2<-A.4.mean_set[2];A.4.3.sj2<-A.4.mean_set[3];A.4.2.ns<-A.4.mean_set[4];A.4.2.sa2<-A.4.mean_set[5];A.4.2.sj2<-A.4.mean_set[6];A.4.1.ns<-A.4.mean_set[7];A.4.1.sa1<-A.4.mean_set[8];A.4.1.sj1<-A.4.mean_set[9];A.4.1.sa2<-A.4.mean_set[10];A.4.1.sj2<-A.4.mean_set[11];A.4.01.ns<-A.4.mean_set[12];A.4.01.sa1<-A.4.mean_set[13];A.4.01.sj1<-A.4.mean_set[14];A.4.01.sa2<-A.4.mean_set[15];A.4.01.sj2<-A.4.mean_set[16];A.4.0.ns<-A.4.mean_set[17];A.4.0.sa1<-A.4.mean_set[18];A.4.0.sj1<-A.4.mean_set[19];A.4.0.sa2<-A.4.mean_set[20];A.4.0.sj2<-A.4.mean_set[21]
+
+I.4.3.ns<-I.4.mean_set[1];I.4.3.sa2<-I.4.mean_set[2];I.4.3.sj2<-I.4.mean_set[3];I.4.2.ns<-I.4.mean_set[4];I.4.2.sa2<-I.4.mean_set[5];I.4.2.sj2<-I.4.mean_set[6];I.4.1.ns<-I.4.mean_set[7];I.4.1.sa1<-I.4.mean_set[8];I.4.1.sj1<-I.4.mean_set[9];I.4.1.sa2<-I.4.mean_set[10];I.4.1.sj2<-I.4.mean_set[11];I.4.01.ns<-I.4.mean_set[12];I.4.01.sa1<-I.4.mean_set[13];I.4.01.sj1<-I.4.mean_set[14];I.4.01.sa2<-I.4.mean_set[15];I.4.01.sj2<-I.4.mean_set[16];I.4.0.ns<-I.4.mean_set[17];I.4.0.sa1<-I.4.mean_set[18];I.4.0.sj1<-I.4.mean_set[19];I.4.0.sa2<-I.4.mean_set[20];I.4.0.sj2<-I.4.mean_set[21]
+
+M.4.3.ns<-M.4.mean_set[1];M.4.3.sa2<-M.4.mean_set[2];M.4.3.sj2<-M.4.mean_set[3];M.4.2.ns<-M.4.mean_set[4];M.4.2.sa2<-M.4.mean_set[5];M.4.2.sj2<-M.4.mean_set[6];M.4.1.ns<-M.4.mean_set[7];M.4.1.sa1<-M.4.mean_set[8];M.4.1.sj1<-M.4.mean_set[9];M.4.1.sa2<-M.4.mean_set[10];M.4.1.sj2<-M.4.mean_set[11];M.4.01.ns<-M.4.mean_set[12];M.4.01.sa1<-M.4.mean_set[13];M.4.01.sj1<-M.4.mean_set[14];M.4.01.sa2<-M.4.mean_set[15];M.4.01.sj2<-M.4.mean_set[16];M.4.0.ns<-M.4.mean_set[17];M.4.0.sa1<-M.4.mean_set[18];M.4.0.sj1<-M.4.mean_set[19];M.4.0.sa2<-M.4.mean_set[20];M.4.0.sj2<-M.4.mean_set[21]
+
+M_I.4.3.ns<-log.M.I.4_set[1];M_I.4.3.sa2<-log.M.I.4_set[2];M_I.4.3.sj2<-log.M.I.4_set[3];M_I.4.2.ns<-log.M.I.4_set[4];M_I.4.2.sa2<-log.M.I.4_set[5];M_I.4.2.sj2<-log.M.I.4_set[6];M_I.4.1.ns<-log.M.I.4_set[7];M_I.4.1.sa1<-log.M.I.4_set[8];M_I.4.1.sj1<-log.M.I.4_set[9];M_I.4.1.sa2<-log.M.I.4_set[10];M_I.4.1.sj2<-log.M.I.4_set[11];M_I.4.01.ns<-log.M.I.4_set[12];M_I.4.01.sa1<-log.M.I.4_set[13];M_I.4.01.sj1<-log.M.I.4_set[14];M_I.4.01.sa2<-log.M.I.4_set[15];M_I.4.01.sj2<-log.M.I.4_set[16];M_I.4.0.ns<-log.M.I.4_set[17];M_I.4.0.sa1<-log.M.I.4_set[18];M_I.4.0.sj1<-log.M.I.4_set[19];M_I.4.0.sa2<-log.M.I.4_set[20];M_I.4.0.sj2<-log.M.I.4_set[21]
+
+```
+
+
+
+
+```{r}
+#frequency of 1 severe storm every 3 years 
+
+A.3.mean_set<-psi.A.sev.set*NaN
+I.3.mean_set<-psi.A.sev.set*NaN
+M.3.mean_set<-psi.A.sev.set*NaN
+log.M.I.3_set<-psi.A.sev.set*NaN
+
+tset.8.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,2250,3345,4440)
+tset.8.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.8.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+for(j in 1:length(psi.A.sev.set)){
+t_sen_set<-NaN*tset.8.1;t_sen_set[1]<-0
+a_t <- NaN*tset.8.1;a_t[1]<-0
+sA_set <- NaN*tset.8.1; sA_set[1]<- 0
+f_syn <- NaN*tset.8.1 
+G.simu.8 <- NaN*tset.8.1; G.simu.8[1]<-G0
+J.simu.8 <- NaN*tset.8.1; J.simu.8[1]<-J0
+A.simu.8 <- NaN*tset.8.1; A.simu.8[1]<-A0
+M.simu.8 <- NaN*tset.8.1; M.simu.8[1]<-M0
+I.simu.8 <- NaN*tset.8.1; I.simu.8[1] <- I0
+psi.simu<-NaN*tset.8.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.8.1)){
+  dt <- tset.8.1[i]-tset.8.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.8[i-1]
+	J <- J.simu.8[i-1]
+	A <- A.simu.8[i-1]
+	M <- M.simu.8[i-1] 
+	I <- I.simu.8[i-1]
+	
+	if(tset.8.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+   a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.8.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.8[i]<-1*J 
+    A.simu.8[i]<-psi.A.mild*A
+    M.simu.8[i]<-1*M
+    I.simu.8[i]<-1*I
+    
+  } else if (tset.8.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev.set[j]
+    J.simu.8[i]<-psi.b.J.set[j]*J
+    A.simu.8[i]<-psi.A.sev.set[j]*A
+    M.simu.8[i]<-psi.b.MI.set[j]*M
+    I.simu.8[i]<-psi.b.MI.set[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.8[i] <- J + dJ
+  A.simu.8[i] <- A + dA
+  M.simu.8[i] <- M + dM
+	I.simu.8[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.8[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+
+#the dates used to get the average values of A, M, and I under each storm regime were from 7/1 to 10/1 of years 9,10, and 11 (corresponding to days 3476-3559, 3832-3924, and 4197-4289); these days were converted to the equivalent elements of the simulation using time point in simu = (time in days)*(# of intervals in simu)/(# of days in simu)
+hold.A<-c(A.simu.8[52823:54225], A.simu.8[58384:59786], A.simu.8[63945:65347])
+hold.I<-c(I.simu.8[52823:54225], I.simu.8[58384:59786], I.simu.8[63945:65347])
+hold.M<-c(M.simu.8[52823:54225], M.simu.8[58384:59786],M.simu.8[63945:65347])
+
+
+A.3.mean_set[j]<-mean(hold.A)
+I.3.mean_set[j]<-mean(hold.I)
+M.3.mean_set[j]<-mean(hold.M)
+log.M.I.3_set[j]<-log(M.3.mean_set[j]/I.3.mean_set[j])
+
+}
+
+
+```
+
+```{r}
+#labeling the values saved from the above simulations
+A.3.3.ns<-A.3.mean_set[1];A.3.3.sa2<-A.3.mean_set[2];A.3.3.sj2<-A.3.mean_set[3];A.3.2.ns<-A.3.mean_set[4];A.3.2.sa2<-A.3.mean_set[5];A.3.2.sj2<-A.3.mean_set[6];A.3.1.ns<-A.3.mean_set[7];A.3.1.sa1<-A.3.mean_set[8];A.3.1.sj1<-A.3.mean_set[9];A.3.1.sa2<-A.3.mean_set[10];A.3.1.sj2<-A.3.mean_set[11];A.3.01.ns<-A.3.mean_set[12];A.3.01.sa1<-A.3.mean_set[13];A.3.01.sj1<-A.3.mean_set[14];A.3.01.sa2<-A.3.mean_set[15];A.3.01.sj2<-A.3.mean_set[16];A.3.0.ns<-A.3.mean_set[17];A.3.0.sa1<-A.3.mean_set[18];A.3.0.sj1<-A.3.mean_set[19];A.3.0.sa2<-A.3.mean_set[20];A.3.0.sj2<-A.3.mean_set[21]
+
+I.3.3.ns<-I.3.mean_set[1];I.3.3.sa2<-I.3.mean_set[2];I.3.3.sj2<-I.3.mean_set[3];I.3.2.ns<-I.3.mean_set[4];I.3.2.sa2<-I.3.mean_set[5];I.3.2.sj2<-I.3.mean_set[6];I.3.1.ns<-I.3.mean_set[7];I.3.1.sa1<-I.3.mean_set[8];I.3.1.sj1<-I.3.mean_set[9];I.3.1.sa2<-I.3.mean_set[10];I.3.1.sj2<-I.3.mean_set[11];I.3.01.ns<-I.3.mean_set[12];I.3.01.sa1<-I.3.mean_set[13];I.3.01.sj1<-I.3.mean_set[14];I.3.01.sa2<-I.3.mean_set[15];I.3.01.sj2<-I.3.mean_set[16];I.3.0.ns<-I.3.mean_set[17];I.3.0.sa1<-I.3.mean_set[18];I.3.0.sj1<-I.3.mean_set[19];I.3.0.sa2<-I.3.mean_set[20];I.3.0.sj2<-I.3.mean_set[21]
+
+M.3.3.ns<-M.3.mean_set[1];M.3.3.sa2<-M.3.mean_set[2];M.3.3.sj2<-M.3.mean_set[3];M.3.2.ns<-M.3.mean_set[4];M.3.2.sa2<-M.3.mean_set[5];M.3.2.sj2<-M.3.mean_set[6];M.3.1.ns<-M.3.mean_set[7];M.3.1.sa1<-M.3.mean_set[8];M.3.1.sj1<-M.3.mean_set[9];M.3.1.sa2<-M.3.mean_set[10];M.3.1.sj2<-M.3.mean_set[11];M.3.01.ns<-M.3.mean_set[12];M.3.01.sa1<-M.3.mean_set[13];M.3.01.sj1<-M.3.mean_set[14];M.3.01.sa2<-M.3.mean_set[15];M.3.01.sj2<-M.3.mean_set[16];M.3.0.ns<-M.3.mean_set[17];M.3.0.sa1<-M.3.mean_set[18];M.3.0.sj1<-M.3.mean_set[19];M.3.0.sa2<-M.3.mean_set[20];M.3.0.sj2<-M.3.mean_set[21]
+
+M_I.3.3.ns<-log.M.I.3_set[1];M_I.3.3.sa2<-log.M.I.3_set[2];M_I.3.3.sj2<-log.M.I.3_set[3];M_I.3.2.ns<-log.M.I.3_set[4];M_I.3.2.sa2<-log.M.I.3_set[5];M_I.3.2.sj2<-log.M.I.3_set[6];M_I.3.1.ns<-log.M.I.3_set[7];M_I.3.1.sa1<-log.M.I.3_set[8];M_I.3.1.sj1<-log.M.I.3_set[9];M_I.3.1.sa2<-log.M.I.3_set[10];M_I.3.1.sj2<-log.M.I.3_set[11];M_I.3.01.ns<-log.M.I.3_set[12];M_I.3.01.sa1<-log.M.I.3_set[13];M_I.3.01.sj1<-log.M.I.3_set[14];M_I.3.01.sa2<-log.M.I.3_set[15];M_I.3.01.sj2<-log.M.I.3_set[16];M_I.3.0.ns<-log.M.I.3_set[17];M_I.3.0.sa1<-log.M.I.3_set[18];M_I.3.0.sj1<-log.M.I.3_set[19];M_I.3.0.sa2<-log.M.I.3_set[20];M_I.3.0.sj2<-log.M.I.3_set[21]
+
+```
+
+
+```{r}
+#frequency of 1 severe storm every 2 years
+
+A.2.mean_set<-psi.A.sev.set*NaN
+I.2.mean_set<-psi.A.sev.set*NaN
+M.2.mean_set<-psi.A.sev.set*NaN
+log.M.I.2_set<-psi.A.sev.set*NaN
+
+tset.9.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,1885,2615,3345,4075,4805,5535)
+tset.9.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.9.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+for(j in 1:length(psi.A.sev.set)){
+t_sen_set<-NaN*tset.9.1;t_sen_set[1]<-0
+a_t <- NaN*tset.9.1;a_t[1]<-0
+sA_set <- NaN*tset.9.1; sA_set[1]<- 0
+f_syn <- NaN*tset.9.1 
+G.simu.9 <- NaN*tset.9.1; G.simu.9[1]<-G0
+J.simu.9 <- NaN*tset.9.1; J.simu.9[1]<-J0
+A.simu.9 <- NaN*tset.9.1; A.simu.9[1]<-A0
+M.simu.9 <- NaN*tset.9.1; M.simu.9[1]<-M0
+I.simu.9 <- NaN*tset.9.1; I.simu.9[1] <-I0
+psi.simu<-NaN*tset.9.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.9.1)){
+  dt <- tset.9.1[i]-tset.9.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.9[i-1]
+	J <- J.simu.9[i-1]
+	A <- A.simu.9[i-1]
+	M <- M.simu.9[i-1] 
+	I <- I.simu.9[i-1]
+	
+	if(tset.9.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+   a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+ 
+		
+  if(tset.9.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.9[i]<-1*J 
+    A.simu.9[i]<-psi.A.mild*A
+    M.simu.9[i]<-1*M
+    I.simu.9[i]<-1*I
+    
+  } else if (tset.9.1[i] %in% t_severe_storm_set){
+    psi.simu[i]<-psi.A.sev.set[j]
+    J.simu.9[i]<-psi.b.J.set[j]*J
+    A.simu.9[i]<-psi.A.sev.set[j]*A
+    M.simu.9[i]<-psi.b.MI.set[j]*M
+    I.simu.9[i]<-psi.b.MI.set[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.9[i] <- J + dJ
+  A.simu.9[i] <- A + dA
+  M.simu.9[i] <- M + dM
+	I.simu.9[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.9[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+
+#the dates used to get the average values of A, M, and I under each storm regime were from 7/1 to 10/1 of years 7 and 8 (corresponding to days 2737-2829 and 3102-3194); these days were converted to the equivalent elements of the simulation using time point in simu = (time in days)*(# of intervals in simu)/(# of days in simu)
+hold.A<-c(A.simu.9[41702:43104], A.simu.9[47264:48665])
+hold.I<-c(I.simu.9[41702:43104], I.simu.9[47264:48665])
+hold.M<-c(M.simu.9[41702:43104], M.simu.9[47264:48665])
+
+
+A.2.mean_set[j]<-mean(hold.A)
+I.2.mean_set[j]<-mean(hold.I)
+M.2.mean_set[j]<-mean(hold.M)
+log.M.I.2_set[j]<-log(M.2.mean_set[j]/I.2.mean_set[j])
+
+}
+
+```
+
+```{r}
+#labeling the values from the above simulations
+A.2.3.ns<-A.2.mean_set[1];A.2.3.sa2<-A.2.mean_set[2];A.2.3.sj2<-A.2.mean_set[3];A.2.2.ns<-A.2.mean_set[4];A.2.2.sa2<-A.2.mean_set[5];A.2.2.sj2<-A.2.mean_set[6];A.2.1.ns<-A.2.mean_set[7];A.2.1.sa1<-A.2.mean_set[8];A.2.1.sj1<-A.2.mean_set[9];A.2.1.sa2<-A.2.mean_set[10];A.2.1.sj2<-A.2.mean_set[11];A.2.01.ns<-A.2.mean_set[12];A.2.01.sa1<-A.2.mean_set[13];A.2.01.sj1<-A.2.mean_set[14];A.2.01.sa2<-A.2.mean_set[15];A.2.01.sj2<-A.2.mean_set[16];A.2.0.ns<-A.2.mean_set[17];A.2.0.sa1<-A.2.mean_set[18];A.2.0.sj1<-A.2.mean_set[19];A.2.0.sa2<-A.2.mean_set[20];A.2.0.sj2<-A.2.mean_set[21]
+
+I.2.3.ns<-I.2.mean_set[1];I.2.3.sa2<-I.2.mean_set[2];I.2.3.sj2<-I.2.mean_set[3];I.2.2.ns<-I.2.mean_set[4];I.2.2.sa2<-I.2.mean_set[5];I.2.2.sj2<-I.2.mean_set[6];I.2.1.ns<-I.2.mean_set[7];I.2.1.sa1<-I.2.mean_set[8];I.2.1.sj1<-I.2.mean_set[9];I.2.1.sa2<-I.2.mean_set[10];I.2.1.sj2<-I.2.mean_set[11];I.2.01.ns<-I.2.mean_set[12];I.2.01.sa1<-I.2.mean_set[13];I.2.01.sj1<-I.2.mean_set[14];I.2.01.sa2<-I.2.mean_set[15];I.2.01.sj2<-I.2.mean_set[16];I.2.0.ns<-I.2.mean_set[17];I.2.0.sa1<-I.2.mean_set[18];I.2.0.sj1<-I.2.mean_set[19];I.2.0.sa2<-I.2.mean_set[20];I.2.0.sj2<-I.2.mean_set[21]
+
+M.2.3.ns<-M.2.mean_set[1];M.2.3.sa2<-M.2.mean_set[2];M.2.3.sj2<-M.2.mean_set[3];M.2.2.ns<-M.2.mean_set[4];M.2.2.sa2<-M.2.mean_set[5];M.2.2.sj2<-M.2.mean_set[6];M.2.1.ns<-M.2.mean_set[7];M.2.1.sa1<-M.2.mean_set[8];M.2.1.sj1<-M.2.mean_set[9];M.2.1.sa2<-M.2.mean_set[10];M.2.1.sj2<-M.2.mean_set[11];M.2.01.ns<-M.2.mean_set[12];M.2.01.sa1<-M.2.mean_set[13];M.2.01.sj1<-M.2.mean_set[14];M.2.01.sa2<-M.2.mean_set[15];M.2.01.sj2<-M.2.mean_set[16];M.2.0.ns<-M.2.mean_set[17];M.2.0.sa1<-M.2.mean_set[18];M.2.0.sj1<-M.2.mean_set[19];M.2.0.sa2<-M.2.mean_set[20];M.2.0.sj2<-M.2.mean_set[21]
+
+M_I.2.3.ns<-log.M.I.2_set[1];M_I.2.3.sa2<-log.M.I.2_set[2];M_I.2.3.sj2<-log.M.I.2_set[3];M_I.2.2.ns<-log.M.I.2_set[4];M_I.2.2.sa2<-log.M.I.2_set[5];M_I.2.2.sj2<-log.M.I.2_set[6];M_I.2.1.ns<-log.M.I.2_set[7];M_I.2.1.sa1<-log.M.I.2_set[8];M_I.2.1.sj1<-log.M.I.2_set[9];M_I.2.1.sa2<-log.M.I.2_set[10];M_I.2.1.sj2<-log.M.I.2_set[11];M_I.2.01.ns<-log.M.I.2_set[12];M_I.2.01.sa1<-log.M.I.2_set[13];M_I.2.01.sj1<-log.M.I.2_set[14];M_I.2.01.sa2<-log.M.I.2_set[15];M_I.2.01.sj2<-log.M.I.2_set[16];M_I.2.0.ns<-log.M.I.2_set[17];M_I.2.0.sa1<-log.M.I.2_set[18];M_I.2.0.sj1<-log.M.I.2_set[19];M_I.2.0.sa2<-log.M.I.2_set[20];M_I.2.0.sj2<-log.M.I.2_set[21]
+```
+
+
+```{r}
+#frequency of 1 severe storm every year
+
+A.1.mean_set<-psi.A.sev.set*NaN
+I.1.mean_set<-psi.A.sev.set*NaN
+M.1.mean_set<-psi.A.sev.set*NaN
+log.M.I.1_set<-psi.A.sev.set*NaN
+
+tset.10.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,1520,1885,2250,2615,2980,3345,3710,4075,4440,4805,5170)
+tset.10.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.10.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+for(j in 1:length(psi.A.sev.set)){
+t_sen_set<-NaN*tset.10.1;t_sen_set[1]<-0
+a_t <- NaN*tset.10.1;a_t[1]<-0
+sA_set <- NaN*tset.10.1; sA_set[1]<- 0
+f_syn <- NaN*tset.10.1 
+G.simu.10 <- NaN*tset.10.1; G.simu.10[1]<-G0
+J.simu.10 <- NaN*tset.10.1; J.simu.10[1]<-J0
+A.simu.10 <- NaN*tset.10.1; A.simu.10[1]<-A0
+M.simu.10 <- NaN*tset.10.1; M.simu.10[1]<-M0
+I.simu.10 <- NaN*tset.10.1; I.simu.10[1] <- I0
+psi.simu<-NaN*tset.10.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.10.1)){
+  dt <- tset.10.1[i]-tset.10.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.10[i-1]
+	J <- J.simu.10[i-1]
+	A <- A.simu.10[i-1]
+	M <- M.simu.10[i-1] 
+	I <- I.simu.10[i-1]
+	
+	if(tset.10.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+		
+  if(tset.10.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.10[i]<-1*J 
+    A.simu.10[i]<-psi.A.mild*A
+    M.simu.10[i]<-1*M
+    I.simu.10[i]<-1*I
+    
+  } else if (tset.10.1[i] %in% t_severe_storm_set){
+     psi.simu[i]<-psi.A.sev.set[j]
+    J.simu.10[i]<-psi.b.J.set[j]*J
+    A.simu.10[i]<-psi.A.sev.set[j]*A
+    M.simu.10[i]<-psi.b.MI.set[j]*M
+    I.simu.10[i]<-psi.b.MI.set[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.10[i] <- J + dJ
+  A.simu.10[i] <- A + dA
+  M.simu.10[i] <- M + dM
+	I.simu.10[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.10[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+
+#the dates used to get the average values of A, M, and I under each storm regime were from 7/1 to 10/1 of year 12 (corresponding to days 4562-4654); these days were converted to the equivalent elements of the simulation using time point in simu = (time in days)*(# of intervals in simu)/(# of days in simu)
+hold.A<-c(A.simu.10[69513:70915])
+hold.I<-c(I.simu.10[69513:70915])
+hold.M<-c(M.simu.10[69513:70915])
+
+
+A.1.mean_set[j]<-mean(hold.A)
+I.1.mean_set[j]<-mean(hold.I)
+M.1.mean_set[j]<-mean(hold.M)
+log.M.I.1_set[j]<-log(M.1.mean_set[j]/I.1.mean_set[j])
+
+}
+
+```
+
+
+```{r}
+#labeling the values from the above simulations
+A.1.3.ns<-A.1.mean_set[1];A.1.3.sa2<-A.1.mean_set[2];A.1.3.sj2<-A.1.mean_set[3];A.1.2.ns<-A.1.mean_set[4];A.1.2.sa2<-A.1.mean_set[5];A.1.2.sj2<-A.1.mean_set[6];A.1.1.ns<-A.1.mean_set[7];A.1.1.sa1<-A.1.mean_set[8];A.1.1.sj1<-A.1.mean_set[9];A.1.1.sa2<-A.1.mean_set[10];A.1.1.sj2<-A.1.mean_set[11];A.1.01.ns<-A.1.mean_set[12];A.1.01.sa1<-A.1.mean_set[13];A.1.01.sj1<-A.1.mean_set[14];A.1.01.sa2<-A.1.mean_set[15];A.1.01.sj2<-A.1.mean_set[16];A.1.0.ns<-A.1.mean_set[17];A.1.0.sa1<-A.1.mean_set[18];A.1.0.sj1<-A.1.mean_set[19];A.1.0.sa2<-A.1.mean_set[20];A.1.0.sj2<-A.1.mean_set[21]
+
+I.1.3.ns<-I.1.mean_set[1];I.1.3.sa2<-I.1.mean_set[2];I.1.3.sj2<-I.1.mean_set[3];I.1.2.ns<-I.1.mean_set[4];I.1.2.sa2<-I.1.mean_set[5];I.1.2.sj2<-I.1.mean_set[6];I.1.1.ns<-I.1.mean_set[7];I.1.1.sa1<-I.1.mean_set[8];I.1.1.sj1<-I.1.mean_set[9];I.1.1.sa2<-I.1.mean_set[10];I.1.1.sj2<-I.1.mean_set[11];I.1.01.ns<-I.1.mean_set[12];I.1.01.sa1<-I.1.mean_set[13];I.1.01.sj1<-I.1.mean_set[14];I.1.01.sa2<-I.1.mean_set[15];I.1.01.sj2<-I.1.mean_set[16];I.1.0.ns<-I.1.mean_set[17];I.1.0.sa1<-I.1.mean_set[18];I.1.0.sj1<-I.1.mean_set[19];I.1.0.sa2<-I.1.mean_set[20];I.1.0.sj2<-I.1.mean_set[21]
+
+M.1.3.ns<-M.1.mean_set[1];M.1.3.sa2<-M.1.mean_set[2];M.1.3.sj2<-M.1.mean_set[3];M.1.2.ns<-M.1.mean_set[4];M.1.2.sa2<-M.1.mean_set[5];M.1.2.sj2<-M.1.mean_set[6];M.1.1.ns<-M.1.mean_set[7];M.1.1.sa1<-M.1.mean_set[8];M.1.1.sj1<-M.1.mean_set[9];M.1.1.sa2<-M.1.mean_set[10];M.1.1.sj2<-M.1.mean_set[11];M.1.01.ns<-M.1.mean_set[12];M.1.01.sa1<-M.1.mean_set[13];M.1.01.sj1<-M.1.mean_set[14];M.1.01.sa2<-M.1.mean_set[15];M.1.01.sj2<-M.1.mean_set[16];M.1.0.ns<-M.1.mean_set[17];M.1.0.sa1<-M.1.mean_set[18];M.1.0.sj1<-M.1.mean_set[19];M.1.0.sa2<-M.1.mean_set[20];M.1.0.sj2<-M.1.mean_set[21]
+
+M_I.1.3.ns<-log.M.I.1_set[1];M_I.1.3.sa2<-log.M.I.1_set[2];M_I.1.3.sj2<-log.M.I.1_set[3];M_I.1.2.ns<-log.M.I.1_set[4];M_I.1.2.sa2<-log.M.I.1_set[5];M_I.1.2.sj2<-log.M.I.1_set[6];M_I.1.1.ns<-log.M.I.1_set[7];M_I.1.1.sa1<-log.M.I.1_set[8];M_I.1.1.sj1<-log.M.I.1_set[9];M_I.1.1.sa2<-log.M.I.1_set[10];M_I.1.1.sj2<-log.M.I.1_set[11];M_I.1.01.ns<-log.M.I.1_set[12];M_I.1.01.sa1<-log.M.I.1_set[13];M_I.1.01.sj1<-log.M.I.1_set[14];M_I.1.01.sa2<-log.M.I.1_set[15];M_I.1.01.sj2<-log.M.I.1_set[16];M_I.1.0.ns<-log.M.I.1_set[17];M_I.1.0.sa1<-log.M.I.1_set[18];M_I.1.0.sj1<-log.M.I.1_set[19];M_I.1.0.sa2<-log.M.I.1_set[20];M_I.1.0.sj2<-log.M.I.1_set[21]
+
+```
+
+
+
+#Plotting Appendix S1: Figure S5 
+```{r}
+#Making a heat map of the log(M/I) under each storm regime (Appendix S1: Figure S5)
+
+#putting storm frequency, intensity, scouring scenario, and log(M/I) values into one data frame in order to make a faceted heatmap
+storm_freq_col3<-c(1/5,1/5,1/5,1/5,1/5,1/4,1/4,1/4,1/4,1/4,1/3,1/3,1/3,1/3,1/3,1/2,1/2,1/2,1/2,1/2,1/1,1/1,1/1,1/1,1/1,1/5,1/5,1/5,1/5,1/5,1/4,1/4,1/4,1/4,1/4,1/3,1/3,1/3,1/3,1/3,1/2,1/2,1/2,1/2,1/2,1/1,1/1,1/1,1/1,1/1,1/5,1/5,1/5,1/5,1/5,1/4,1/4,1/4,1/4,1/4,1/3,1/3,1/3,1/3,1/3,1/2,1/2,1/2,1/2,1/2,1/1,1/1,1/1,1/1,1/1,1/5,1/5,1/5,1/5,1/5,1/4,1/4,1/4,1/4,1/4,1/3,1/3,1/3,1/3,1/3,1/2,1/2,1/2,1/2,1/2,1/1,1/1,1/1,1/1,1/1,1/5,1/5,1/5,1/5,1/5,1/4,1/4,1/4,1/4,1/4,1/3,1/3,1/3,1/3,1/3,1/2,1/2,1/2,1/2,1/2,1/1,1/1,1/1,1/1,1/1)
+storm_sev_col3<-c(0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0,0.7,0.8,0.9,0.99,1.0)
+storm_sev_col4<-as.character(storm_sev_col3)
+storm_freq_col4<-as.character(storm_freq_col3)
+scouring_col<-c("ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns","ns", "sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1","sa1", "sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sa2","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj1","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2","sj2")
+M_I_col<-c(M_I.5.3.ns,M_I.5.2.ns,M_I.5.1.ns,M_I.5.01.ns,M_I.5.0.ns,M_I.4.3.ns,M_I.4.2.ns,M_I.4.1.ns,M_I.4.01.ns,M_I.4.0.ns,M_I.3.3.ns,M_I.3.2.ns,M_I.3.1.ns,M_I.3.01.ns,M_I.3.0.ns,M_I.2.3.ns,M_I.2.2.ns,M_I.2.1.ns,M_I.2.01.ns,M_I.2.0.ns,M_I.1.3.ns,M_I.1.2.ns,M_I.1.1.ns,M_I.1.01.ns,M_I.1.0.ns,M_I.5.3.ns,M_I.5.2.ns,M_I.5.1.sa1,M_I.5.01.sa1,M_I.5.0.sa1,M_I.4.3.ns,M_I.4.2.ns,M_I.4.1.sa1,M_I.4.01.sa1,M_I.4.0.sa1,M_I.3.3.ns,M_I.3.2.ns,M_I.3.1.sa1,M_I.3.01.sa1,M_I.3.0.sa1,M_I.2.3.ns,M_I.2.2.ns,M_I.2.1.sa1,M_I.2.01.sa1,M_I.2.0.sa1,M_I.1.3.ns,M_I.1.2.ns,M_I.1.1.sa1,M_I.1.01.sa1,M_I.1.0.sa1,M_I.5.3.sa2,M_I.5.2.sa2,M_I.5.1.sa2,M_I.5.01.sa2,M_I.5.0.sa2,M_I.4.3.sa2,M_I.4.2.sa2,M_I.4.1.sa2,M_I.4.01.sa2,M_I.4.0.sa2,M_I.3.3.sa2,M_I.3.2.sa2,M_I.3.1.sa2,M_I.3.01.sa2,M_I.3.0.sa2,M_I.2.3.sa2,M_I.2.2.sa2,M_I.2.1.sa2,M_I.2.01.sa2,M_I.2.0.sa2,M_I.1.3.sa2,M_I.1.2.sa2,M_I.1.1.sa2,M_I.1.01.sa2,M_I.1.0.sa2,M_I.5.3.ns,M_I.5.2.ns,M_I.5.1.sj1,M_I.5.01.sj1,M_I.5.0.sj1,M_I.4.3.ns,M_I.4.2.ns,M_I.4.1.sj1,M_I.4.01.sj1,M_I.4.0.sj1,M_I.3.3.ns,M_I.3.2.ns,M_I.3.1.sj1,M_I.3.01.sj1,M_I.3.0.sj1,M_I.2.3.ns,M_I.2.2.ns,M_I.2.1.sj1,M_I.2.01.sj1,M_I.2.0.sj1,M_I.1.3.ns,M_I.1.2.ns,M_I.1.1.sj1,M_I.1.01.sj1,M_I.1.0.sj1,M_I.5.3.sj2,M_I.5.2.sj2,M_I.5.1.sj2,M_I.5.01.sj2,M_I.5.0.sj2,M_I.4.3.sj2,M_I.4.2.sj2,M_I.4.1.sj2,M_I.4.01.sj2,M_I.4.0.sj2,M_I.3.3.sj2,M_I.3.2.sj2,M_I.3.1.sj2,M_I.3.01.sj2,M_I.3.0.sj2,M_I.2.3.sj2,M_I.2.2.sj2,M_I.2.1.sj2,M_I.2.01.sj2,M_I.2.0.sj2,M_I.1.3.sj2,M_I.1.2.sj2,M_I.1.1.sj2,M_I.1.01.sj2,M_I.1.0.sj2)
+
+
+all_freq_sev_data<-data.frame(storm_freq_col4,storm_sev_col4, scouring_col, M_I_col)
+
+
+#add a column with either I or M depending on whether M_I_col is negative (I dominates) or positive (M dominates)
+
+all_freq_sev_data$dominance<-NaN
+
+for(i in 1:dim(all_freq_sev_data)[1]){
+ 
+  if(all_freq_sev_data$M_I_col[i] < 0 ){
+    all_freq_sev_data$dominance[i] <- 'I'
+  }
+  
+  if(all_freq_sev_data$M_I_col[i] > 0){
+    all_freq_sev_data$dominance[i] <- 'M'
+  }
+  
+}
+
+
+#making labels for each facet in the heatmap
+scouring.labs <- c("1. No scouring", "2. Intermediate scouring all","3. Proportional scouring all","4. Intermediate scouring J","5. Proportional scouring J")
+names(scouring.labs) <- c("ns", "sa1","sa2","sj1","sj2")
+
+library("ggplot2")
+all.heatmap <- ggplot(data = all_freq_sev_data, mapping = aes(x = storm_freq_col4,
+                                                       y = storm_sev_col4,
+                                                       fill = M_I_col)) +
+  geom_tile() +
+  geom_text(aes(label = dominance)) + 
+  xlab(label = "Storm frequency") +
+  ylab(label="Storm intensity (fraction kelp removed)")+
+   scale_fill_gradient2(name = "log(M/I)",
+                      low = "royalblue1",
+                      mid="white",
+                      midpoint=0,
+                      high = "chocolate1")+
+  scale_x_discrete(name="Storm frequency", labels=c(5,4,3,2,1))+
+  facet_wrap(~scouring_col, ncol=3,labeller = labeller(scouring_col = scouring.labs))#break up the date into grids depending on the scouring scenario
+
+
+#tiff(filename="FigS5.tif", height=5, width=7,units="in",res=800,compression="lzw")#for making tif file
+all.heatmap
+#dev.off()
+
+
+```
+
+#Plotting Figure 5
+```{r}
+#looking at varying frequency only, with intensity of psi.A.sev=0 (Figure 5)
+
+#getting the sets of results to plot
+freq_set <- c(1,2,3,4,5)
+A.summer_avg.sa1<-c(A.5.0.sa1,A.4.0.sa1,A.3.0.sa1,A.2.0.sa1,A.1.0.sa1)
+M.summer_avg.sa1<-c(M.5.0.sa1,M.4.0.sa1,M.3.0.sa1,M.2.0.sa1,M.1.0.sa1)
+I.summer_avg.sa1<-c(I.5.0.sa1,I.4.0.sa1,I.3.0.sa1,I.2.0.sa1,I.1.0.sa1)
+
+A.summer_avg.sj1<-c(A.5.0.sj1,A.4.0.sj1,A.3.0.sj1,A.2.0.sj1,A.1.0.sj1)
+M.summer_avg.sj1<-c(M.5.0.sj1,M.4.0.sj1,M.3.0.sj1,M.2.0.sj1,M.1.0.sj1)
+I.summer_avg.sj1<-c(I.5.0.sj1,I.4.0.sj1,I.3.0.sj1,I.2.0.sj1,I.1.0.sj1)
+
+A.summer_avg.ns<-c(A.5.0.ns,A.4.0.ns,A.3.0.ns,A.2.0.ns,A.1.0.ns)
+M.summer_avg.ns<-c(M.5.0.ns,M.4.0.ns,M.3.0.ns,M.2.0.ns,M.1.0.ns)
+I.summer_avg.ns<-c(I.5.0.ns,I.4.0.ns,I.3.0.ns,I.2.0.ns,I.1.0.ns)
+
+A.summer_avg.sa2<-c(A.5.0.sa2,A.4.0.sa2,A.3.0.sa2,A.2.0.sa2,A.1.0.sa2)
+M.summer_avg.sa2<-c(M.5.0.sa2,M.4.0.sa2,M.3.0.sa2,M.2.0.sa2,M.1.0.sa2)
+I.summer_avg.sa2<-c(I.5.0.sa2,I.4.0.sa2,I.3.0.sa2,I.2.0.sa2,I.1.0.sa2)
+
+A.summer_avg.sj2<-c(A.5.0.sj2,A.4.0.sj2,A.3.0.sj2,A.2.0.sj2,A.1.0.sj2)
+M.summer_avg.sj2<-c(M.5.0.sj2,M.4.0.sj2,M.3.0.sj2,M.2.0.sj2,M.1.0.sj2)
+I.summer_avg.sj2<-c(I.5.0.sj2,I.4.0.sj2,I.3.0.sj2,I.2.0.sj2,I.1.0.sj2)
+
+
+```
+
+
+
+```{r, fig.height=5, fig.width=5}
+
+#plotting storm frequency vs summer abundance data
+par(mfrow=c(3,2), omi=c(.2,.2,.5,.2))
+par(mai=c(0.4,0.7,0.15,0.1))
+plot(x = freq_set, y = A.summer_avg.ns, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+lines(x = freq_set, y = M.summer_avg.ns,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.ns,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+mtext("a) No scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+mtext("J, M, and I scoured", side=3, line=2, cex=0.8, lwd=2)
+mtext("Mean summer abundance", side=2,cex=0.8, outer=TRUE)
+par(mai=c(0.4,0.1,0.15,0.7))
+plot(x = freq_set, y = A.summer_avg.ns, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+lines(x = freq_set, y = M.summer_avg.ns,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.ns,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+mtext("J only scoured", side=3, line=2, cex=0.8, lwd=2)
+par(mai=c(0.4,0.7,0.05,0.1))
+plot(x = freq_set, y = A.summer_avg.sa1, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+lines(x = freq_set, y = M.summer_avg.sa1,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sa1,type='b',pch=17, col = 'royalblue1', lwd = 2,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+mtext("b) Intermediate scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+par(mai=c(0.4,0.1,0.05,0.7))
+plot(x = freq_set, y = A.summer_avg.sj1, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+lines(x = freq_set, y = M.summer_avg.sj1,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sj1,type='b',pch=17, col = 'royalblue1', lwd = 2,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+legend("right", c("A", "I", "M"), col=c("palegreen3","royalblue1","chocolate1"),pch=c(16,17,15), ncol=1, lwd=2, xpd=TRUE, inset=c(-0.4,0))
+par(mai=c(0.4,0.7,0.05,0.1))
+plot(x = freq_set, y = A.summer_avg.sa2, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+lines(x = freq_set, y = M.summer_avg.sa2,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sa2,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=c(5,4,3,2,1),las=0)
+mtext("c) Proportional scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+par(mai=c(0.4,0.1,0.05,0.7))
+plot(x = freq_set, y = A.summer_avg.sj2, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+lines(x = freq_set, y = M.summer_avg.sj2,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sj2,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=c(5,4,3,2,1),las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+mtext("Years between major storms", side=1, cex=0.8, outer=TRUE)
+
+```
+
+```{r}
+#calculating the frequencies at which dominance flips between I and M in the above plots
+#The points at which dominance flipped between I and M (vertical lines in Figure 5) were computed by calculating the equations of the lines representing I.summer_avg and M.summer_avg in the region between the two frequencies in which these lines intersected, then solving for the intersection point
+#use equation of line: y=m(x-x1) +y1
+#for No scouring (top row), can see from the above plot that dominance flips from I to M between storm frequencies of 2 and 1 (corresponding to values 4 and 5 of freq_set, respectively). First, get the equations of the lines for M and I (the y's) as a function of storm frequency, freq.x (the x):
+#M.ns.y=(M.summer_avg.ns[5]-M.summer_avg.ns[4])/1*(freq.x-5)+M.summer_avg.ns[5]
+#I.ns.y=(I.summer_avg.ns[5]-I.summer_avg.ns[4])/1*(freq.x-5)+I.summer_avg.ns[5]
+#set M.ns.y=I.ns.y and solve for freq.x at which these two are equal (time of flip in dominance)
+freq.flip.ns<-(I.summer_avg.ns[5]-M.summer_avg.ns[5]-5*(I.summer_avg.ns[5]-I.summer_avg.ns[4])+5*(M.summer_avg.ns[5]-M.summer_avg.ns[4]))/(M.summer_avg.ns[5]-M.summer_avg.ns[4]-I.summer_avg.ns[5]+I.summer_avg.ns[4])
+#repeat for intermediate scouring all (flip between storm frequencies of 4 and 5, corresponding to freq_set values of 2 and 1)
+freq.flip.sa1<-(I.summer_avg.sa1[2]-M.summer_avg.sa1[2]-2*(I.summer_avg.sa1[2]-I.summer_avg.sa1[1])+2*(M.summer_avg.sa1[2]-M.summer_avg.sa1[1]))/(M.summer_avg.sa1[2]-M.summer_avg.sa1[1]-I.summer_avg.sa1[2]+I.summer_avg.sa1[1])
+#repeat for intermediate scouring of juvenile sporophytes only
+freq.flip.sj1<-(I.summer_avg.sj1[5]-M.summer_avg.sj1[5]-5*(I.summer_avg.sj1[5]-I.summer_avg.sj1[4])+5*(M.summer_avg.sj1[5]-M.summer_avg.sj1[4]))/(M.summer_avg.sj1[5]-M.summer_avg.sj1[4]-I.summer_avg.sj1[5]+I.summer_avg.sj1[4])
+#repeat for proportional scouring all
+freq.flip.sa2<-(I.summer_avg.sa2[2]-M.summer_avg.sa2[2]-2*(I.summer_avg.sa2[2]-I.summer_avg.sa2[1])+2*(M.summer_avg.sa2[2]-M.summer_avg.sa2[1]))/(M.summer_avg.sa2[2]-M.summer_avg.sa2[1]-I.summer_avg.sa2[2]+I.summer_avg.sa2[1])
+#repeat for proportional scouring of juvenile sporophytes only
+freq.flip.sj2<-(I.summer_avg.sj2[5]-M.summer_avg.sj2[5]-5*(I.summer_avg.sj2[5]-I.summer_avg.sj2[4])+5*(M.summer_avg.sj2[5]-M.summer_avg.sj2[4]))/(M.summer_avg.sj2[5]-M.summer_avg.sj2[4]-I.summer_avg.sj2[5]+I.summer_avg.sj2[4])
+
+#values of flips in dominance (vertical lines in Figure 5); note these correspond to values of freq_set, which go from 1 to 5, but on the plots in Figure 5, freq_set=1 corresponds to 5 years between severe storms (lowest frequency) and freq_set=5 corresponds to 1 year between severe storms (highest frequency)
+freq.flip.ns
+freq.flip.sa1
+freq.flip.sj1
+freq.flip.sa2
+freq.flip.sj2
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+#plotting Figure 5
+#tiff(filename="Fig5.tif", height=5, width=5,units="in",res=800,compression="lzw")#for making tif file
+par(mfrow=c(3,2), omi=c(.2,.2,.5,.2))
+par(mai=c(0.4,0.7,0.15,0.1))
+plot(x = freq_set, y = A.summer_avg.ns, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+abline(v=4.514, col="black", lty=1)#frequency at which dominance flips from I to M; see end of this code chunk for how this value was calculated
+lines(x = freq_set, y = M.summer_avg.ns,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.ns,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+mtext("a) No scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+mtext("J, M, and I scoured", side=3, line=2, cex=0.8, lwd=2)
+mtext("Mean summer abundance", side=2,cex=0.8, outer=TRUE)
+par(mai=c(0.4,0.1,0.15,0.7))
+plot(x = freq_set, y = A.summer_avg.ns, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+abline(v=4.514, col="black",lty=1)
+lines(x = freq_set, y = M.summer_avg.ns,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.ns,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+mtext("J only scoured", side=3, line=2, cex=0.8, lwd=2)
+par(mai=c(0.4,0.7,0.05,0.1))
+plot(x = freq_set, y = A.summer_avg.sa1, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+abline(v=1.970, col="black", lwd=1.2)
+lines(x = freq_set, y = M.summer_avg.sa1,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sa1,type='b',pch=17, col = 'royalblue1', lwd = 2,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+mtext("b) Intermediate scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+par(mai=c(0.4,0.1,0.05,0.7))
+plot(x = freq_set, y = A.summer_avg.sj1, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+abline(v=4.316, col="black", lwd=1.2)
+lines(x = freq_set, y = M.summer_avg.sj1,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sj1,type='b',pch=17, col = 'royalblue1', lwd = 2,xaxt="n")
+axis(side=1, at=freq_set, labels=NA,las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+legend("right", c("A", "I", "M"), col=c("palegreen3","royalblue1","chocolate1"),pch=c(16,17,15), ncol=1, lwd=2, xpd=TRUE, inset=c(-0.4,0))
+par(mai=c(0.4,0.7,0.05,0.1))
+plot(x = freq_set, y = A.summer_avg.sa2, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+abline(v=1.261, col="black",lty=1)
+lines(x = freq_set, y = M.summer_avg.sa2,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sa2,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=c(5,4,3,2,1),las=0)
+mtext("c) Proportional scouring", side=3, line=0, cex=.75, lwd=2, adj=0)
+par(mai=c(0.4,0.1,0.05,0.7))
+plot(x = freq_set, y = A.summer_avg.sj2, type = 'b',pch=16, col='palegreen3',las = 1, lwd=2,lty=1, xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n", yaxt="n")
+abline(v=4.251, col="black",lty=1)
+lines(x = freq_set, y = M.summer_avg.sj2,type='b',pch=15, col = 'chocolate1', lwd = 2,lty=1,xaxt="n")
+lines(x = freq_set, y = I.summer_avg.sj2,type='b',pch=17, col = 'royalblue1', lwd = 2,lty=1,xaxt="n")
+axis(side=1, at=freq_set, labels=c(5,4,3,2,1),las=0)
+axis(side=2, at=c(0,.2,.4,.6,.8,1), labels=NA,las=1)
+mtext("Years between major storms", side=1, cex=0.8, outer=TRUE)
+#dev.off()
+
+```
+
+
+#Plotting Appendix S1: Figure S6
+```{r}
+#looking at varying intensity only, with a frequency of one severe storm every year (Appendix S1: Figure S6) 
+
+#getting the sets of results to plot
+
+sev_set<-c(0.7, 0.8, 0.9, 0.99, 1)
+
+A_sev.sa1_avg_set<-c(A.1.3.ns, A.1.2.ns, A.1.1.sa1, A.1.01.sa1, A.1.0.sa1)
+M_sev.sa1_avg_set<-c(M.1.3.ns, M.1.2.ns, M.1.1.sa1, M.1.01.sa1, M.1.0.sa1)
+I_sev.sa1_avg_set<-c(I.1.3.ns, I.1.2.ns, I.1.1.sa1, I.1.01.sa1, I.1.0.sa1)
+
+
+A_sev.sa2_avg_set<-c(A.1.3.sa2, A.1.2.sa2, A.1.1.sa2, A.1.01.sa2, A.1.0.sa2)
+M_sev.sa2_avg_set<-c(M.1.3.sa2, M.1.2.sa2, M.1.1.sa2, M.1.01.sa2, M.1.0.sa2)
+I_sev.sa2_avg_set<-c(I.1.3.sa2, I.1.2.sa2, I.1.1.sa2, I.1.01.sa2, I.1.0.sa2)
+
+
+A_sev.sj1_avg_set<-c(A.1.3.ns, A.1.2.ns, A.1.1.sj1, A.1.01.sj1, A.1.0.sj1)
+M_sev.sj1_avg_set<-c(M.1.3.ns, M.1.2.ns, M.1.1.sj1, M.1.01.sj1, M.1.0.sj1)
+I_sev.sj1_avg_set<-c(I.1.3.ns, I.1.2.ns, I.1.1.sj1, I.1.01.sj1, I.1.0.sj1)
+
+
+A_sev.sj2_avg_set<-c(A.1.3.sj2, A.1.2.sj2, A.1.1.sj2, A.1.01.sj2, A.1.0.sj2)
+M_sev.sj2_avg_set<-c(M.1.3.sj2, M.1.2.sj2, M.1.1.sj2, M.1.01.sj2, M.1.0.sj2)
+I_sev.sj2_avg_set<-c(I.1.3.sj2, I.1.2.sj2, I.1.1.sj2, I.1.01.sj2, I.1.0.sj2)
+
+
+A_sev.ns_avg_set<-c(A.1.3.ns, A.1.2.ns, A.1.1.ns, A.1.01.ns, A.1.0.ns)
+M_sev.ns_avg_set<-c(M.1.3.ns, M.1.2.ns, M.1.1.ns, M.1.01.ns, M.1.0.ns)
+I_sev.ns_avg_set<-c(I.1.3.ns, I.1.2.ns, I.1.1.ns, I.1.01.ns, I.1.0.ns)
+
+
+#also making matrices of these abundances at intensity of psi.A.sev=0 in order to make bar graph
+#scouring of M, I, and J
+sa_sev_matrix<-matrix(c(A.1.0.ns,I.1.0.ns,M.1.0.ns,A.1.0.sa1,I.1.0.sa1,M.1.0.sa1,A.1.0.sa2,I.1.0.sa2,M.1.0.sa2), nrow=3, byrow=TRUE, dimnames=list(c("No scouring","Intermediate (J, M, and I)","Proportional (J, M, and I)"), c("A", "I", "M")))
+#scouring of J only
+sj_sev_matrix<-matrix(c(A.1.0.ns,I.1.0.ns,M.1.0.ns,A.1.0.sj1,I.1.0.sj1,M.1.0.sj1,A.1.0.sj2,I.1.0.sj2,M.1.0.sj2), nrow=3, byrow=TRUE, dimnames=list(c("No scouring","Intermediate (J only)","Proportional (J only)"), c("A", "I", "M")))
+
+```
+
+```{r, fig.width=7, fig.height=7}
+#plotting Appendix S1: Figure S6
+#tiff(filename="FigS6.tif", height=7, width=7,units="in",res=800,compression="lzw")#for making tif file
+par(mar=c(4.2,4,1,1),mfrow=c(2,2), omi=c(0,0.25, 0,0))
+plot(x =sev_set, y = A_sev.sa1_avg_set, type = 'b',pch=16,lty=1, col='palegreen3',las = 1, lwd=2,xlab = NA, ylab = NA, ylim = c(0,1), xaxt="n")
+axis(side=1, at=c(0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1), labels=NA,las=0)
+lines(x = sev_set, y = M_sev.sa1_avg_set,type='b',lty=1,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.sa1_avg_set,type='b',lty=1,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = A_sev.ns_avg_set,type='b',lty=3,pch=16 ,col = 'palegreen3', lwd = 2,xaxt='n')
+lines(x = sev_set, y = M_sev.ns_avg_set,type='b',lty=3,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.ns_avg_set,type='b',lty=3,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = A_sev.sa2_avg_set,type='b',lty=4,pch=16 ,col = 'palegreen3', lwd = 2,xaxt='n')
+lines(x = sev_set, y = M_sev.sa2_avg_set,type='b',lty=4,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.sa2_avg_set,type='b',lty=4,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+legend(x = "topleft", legend = c('A', 'I','M'),lwd=2, pch=c(16,17,15),col=c('palegreen3', 'royalblue1','chocolate1'),cex=.8, ncol=3)
+mtext("a)", side=3, line=0, cex=1,adj=0, lwd=2)
+mtext("Mean summer abundance", side=2, cex=1, outer=TRUE)
+barplot(sa_sev_matrix,xlab=NA, ylab=NA,ylim=c(0,1),col=c('palegreen3','palegreen3','palegreen3','royalblue1','royalblue1','royalblue1','chocolate1','chocolate1','chocolate1'),density=c(1000,15,30),angle=c(30,45,135), beside=TRUE, legend=TRUE, args.legend=list(x="topleft", bty="n", cex=1.2), xaxt="n")
+mtext("b)", side=3, line=0, cex=1,adj=0, lwd=2)
+plot(x =sev_set, y = A_sev.sj1_avg_set, type = 'b',pch=16,lty=1, col='palegreen3',las = 1, lwd=2,xlab = 'Storm intensity (fraction of kelp removed)', ylab = NA, ylim = c(0,1))
+lines(x = sev_set, y = M_sev.sj1_avg_set,type='b',lty=1,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.sj1_avg_set,type='b',lty=1,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = A_sev.ns_avg_set,type='b',lty=3,pch=16 ,col = 'palegreen3', lwd = 2,xaxt='n')
+lines(x = sev_set, y = M_sev.ns_avg_set,type='b',lty=3,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.ns_avg_set,type='b',lty=3,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = A_sev.sj2_avg_set,type='b',lty=4,pch=16 ,col = 'palegreen3', lwd = 2,xaxt='n')
+lines(x = sev_set, y = M_sev.sj2_avg_set,type='b',lty=4,pch=15 ,col = 'chocolate1', lwd = 2,xaxt='n')
+lines(x = sev_set, y = I_sev.sj2_avg_set,type='b',lty=4,pch=17, col = 'royalblue1', lwd = 2,xaxt='n')
+legend(x = "topleft", legend = c('A', 'I','M'),lwd=2, pch=c(16,17,15),col=c('palegreen3', 'royalblue1','chocolate1'),cex=.8, ncol=3)
+mtext("c)", side=3, line=0, cex=1,adj=0, lwd=2)
+barplot(sj_sev_matrix,xlab="Group", ylab=NA,ylim=c(0,1),col=c('palegreen3','palegreen3','palegreen3','royalblue1','royalblue1','royalblue1','chocolate1','chocolate1','chocolate1'),density=c(1000,15,30),angle=c(30,45,135), beside=TRUE, legend=TRUE, args.legend=list(x="topleft", bty="n", cex=1.2))
+mtext("d)", side=3, line=0, cex=1,adj=0, lwd=2)
+#dev.off()
+
+
+
+```
+
+
+#Plotting Appendix S1: Figure S7
+```{r}
+#computing the time it takes frond density to recover (reach yearly maximum) following storms of varying intensity 
+
+psi.A.mild<-.95
+psi.A.sev.set2<-c(0.3,0.2,0.1,0.01,0)
+psi.b.MI.set2<-c(1,1,0.9,0.5,0.1)#used the Intermediate scouring scenario for J, M, and I
+psi.b.J.set2<-c(1,1,0.9,0.5,0.1)
+
+#holding sets for the max frond density, time of max frond density, and time to max frond density following the severe storm at each value of psi.A.sev.set2
+A.max_set<-psi.A.sev.set2*NaN
+A.index_set<-psi.A.sev.set2*NaN
+t_A.max_set<-psi.A.sev.set2*NaN
+
+
+tset.11.0 <- seq(from = 0, to = 5475, length.out = 82125)
+t_mild_storm_set<-c(2:55,335:420,700:785,1065:1150,1430:1515,1795:1880,2160:2245,2525:2610,2890:2975,3255:3340,3620:3705,3985:4070,4350:4435,4715:4800,5080:5165,5445:5475)
+t_severe_storm_set<-c(1155,1520,1885,2250,2615,2980,3345,3710,4075,4440,4805,5170)
+tset.11.1 <- unique(sort(c(t_mild_storm_set, t_severe_storm_set,tset.11.0)))
+t_all_storm_set<-unique(sort(c(t_mild_storm_set, t_severe_storm_set)))
+
+for(j in 1:length(psi.A.sev.set2)){
+t_sen_set<-NaN*tset.11.1;t_sen_set[1]<-0
+a_t <- NaN*tset.11.1;a_t[1]<-0
+sA_set <- NaN*tset.11.1; sA_set[1]<- 0
+f_syn <- NaN*tset.11.1 
+G.simu.11 <- NaN*tset.11.1; G.simu.11[1]<-G0
+J.simu.11 <- NaN*tset.11.1; J.simu.11[1]<-J0
+A.simu.11 <- NaN*tset.11.1; A.simu.11[1]<-A0
+M.simu.11 <- NaN*tset.11.1; M.simu.11[1]<-M0
+I.simu.11 <- NaN*tset.11.1; I.simu.11[1] <- I0
+psi.simu<-NaN*tset.11.1; psi.simu[1:2]<-0
+
+
+for(i in 2:length(tset.11.1)){
+  dt <- tset.11.1[i]-tset.11.1[i-1]
+  t_sen_set[i]<-t_sen_set[i-1]+dt
+  G <- G.simu.11[i-1]
+	J <- J.simu.11[i-1]
+	A <- A.simu.11[i-1]
+	M <- M.simu.11[i-1] 
+	I <- I.simu.11[i-1]
+	
+	if(tset.11.1[i] %in% t_all_storm_set){
+	  t_sen_set[i]<-0
+	}
+	
+  if (t_sen_set[i] < delay){
+    a_t[i] <- 0
+  } else{
+    a_t[i] <- a*(sin(2*pi/period*(t_sen_set[i]+d_syn))+1)
+  }
+  
+
+  if (t_sen_set[i] < delay){
+    f_syn[i] <- 1-psi.simu[i-1]
+  } else{
+    f_syn[i] <- (1-psi.simu[i-1])*exp(-c*(t_sen_set[i]-delay))
+  }
+
+	sA <- a_t[i]*f_syn[i]+b*(1-f_syn[i]) 
+		
+  if(tset.11.1[i] %in% t_mild_storm_set){
+    psi.simu[i]<-psi.A.mild
+    J.simu.11[i]<-1*J 
+    A.simu.11[i]<-psi.A.mild*A
+    M.simu.11[i]<-1*M
+    I.simu.11[i]<-1*I
+    
+  } else if (tset.11.1[i] %in% t_severe_storm_set){
+     psi.simu[i]<-psi.A.sev.set2[j]
+    J.simu.11[i]<-psi.b.J.set2[j]*J
+    A.simu.11[i]<-psi.A.sev.set2[j]*A
+    M.simu.11[i]<-psi.b.MI.set2[j]*M
+    I.simu.11[i]<-psi.b.MI.set2[j]*I
+    
+  } else {
+    psi.simu[i]<-psi.simu[i-1]
+  dJ <- (r_G*L_surface*exp(-k_l*A)*G-r_J*L_surface*exp(-k_l*A)*J-m_J*J^2)*dt
+  dA <- (r_J*L_surface*exp(-k_l*A)*J+g_A*A*L_surface*((K_A-A)/K_A)-sA*A)*dt
+  dM <- (g_M*M*L_surface*exp(-k_l*A)*((S_T-M-alpha*I)/S_T)-s_M*M+sigma_M)*dt
+	dI <- (g_I*I*((S_T-I-beta*M)/S_T)-s_I*I+sigma_I)*dt
+  J.simu.11[i] <- J + dJ
+  A.simu.11[i] <- A + dA
+  M.simu.11[i] <- M + dM
+	I.simu.11[i] <- I + dI}
+	
+	dG <- (sigma_ext+sigma_A*A-r_G*L_surface*exp(-k_l*A)*G-m_G*G^2)*dt
+	G.simu.11[i] <- G + dG
+  sA_set[i] <- sA 
+}
+
+A.year<-c(A.simu.11[67672:72288])#frond density from day 4442 (a few days after the severe storm in year 12) to 4745 (the last day of year 12)
+
+A.index_set[j]<-which.max(A.year)#time point of maximum frond density in this time interval
+A.max_set[j]<-A.simu.11[(67672+A.index_set[j]-1)]#maximum frond density 
+t_A.max_set[j]<-(67672+A.index_set[j]-1)*5476/83425-4442#time of max density in days since the storm 
+
+}
+
+```
+
+```{r}
+#plotting Appendix S1: Figure S7 (time to max frond density following a storm)
+#tiff(filename="FigS7.tif", height=4.5, width=6,units="in",res=800,compression="lzw")#for making tif file
+par(mar=c(4,4,4,4),mfrow=c(1,1))
+plot(x =sev_set, y = t_A.max_set, type = 'b',pch=18,lty=1, col='black',las = 1, lwd=2,xlab ='Storm intensity (fraction of kelp removed)', ylab ='Time to max. frond dens. (days after storm)', ylim = c(0,300), xaxt='n')
+lines(x=sev_set,y=A.max_set*245,type = 'b',pch=18,lty=1, col='palegreen3',las = 1, lwd=2)
+axis(side=4, at=c(0,125,250),labels=c(0,.5,1),las=1, col='palegreen3')
+axis(side=1, at=sev_set,labels=sev_set,las=0)
+legend(x = "bottomleft", legend = c('Time to max.', 'Max. frond density'),lwd=2, pch=18,col=c('black', 'green'),cex=.8, ncol=1)
+mtext("Max. frond density", side=4, line=2.8)
+#dev.off()
+
+
+```
+
+
+
