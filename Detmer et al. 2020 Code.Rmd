@@ -890,7 +890,7 @@ M.severe_summer_sa2<-M.severe_summer_set[3]
 #rearrange these values into a matrix so they can be displayed as a bar graph
 #note that since mild storms do not scour the benthos in any scenario, the mild year values are similar in all scenarios. Therefore, for simplicity, the mild year values from the no scouring scenario were used as the mild year values in Figure 3
 
-all_scouring_matrix<-matrix(c(I.mild_summer_ns,M.mild_summer_ns,I.severe_summer_ns,M.severe_summer_ns,I.severe_summer_sa,M.severe_summer_sa,I.severe_summer_sa2,M.severe_summer_sa2), nrow=4, byrow=TRUE, dimnames=list(c("Mild","Severe, No Scouring", "Severe, Intermediate Scouring", "Severe, Proportional Scouring"), c("Invertebrates", "Macroalgae")))
+all_scouring_matrix<-matrix(c(I.mild_summer_ns,M.mild_summer_ns,I.severe_summer_ns,M.severe_summer_ns,I.severe_summer_sa,M.severe_summer_sa,I.severe_summer_sa2,M.severe_summer_sa2), nrow=4, byrow=TRUE, dimnames=list(c("Mild","Severe, no scouring", "Severe, intermediate scouring", "Severe, proportional scouring"), c("Invertebrates", "Macroalgae")))
 
 ```
 
